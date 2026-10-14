@@ -3,30 +3,37 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FaceFusion v4 - WreckUI</title>
+<title>FaceFusion v4 — WreckUI Neural Studio</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="topbar">
 	<div class="brand">
-		<svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
-			<rect x="1.5" y="1.5" width="21" height="21" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
-			<circle cx="9" cy="10" r="2.4" fill="currentColor"/>
-			<path d="M13.5 8.2c1.2-1 3-1.1 4.2-.2M14 14.8c1.6 1.4 3.6 1.5 5 .4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-			<path d="M6 16.5c1-1.6 2.2-2.4 3.6-2.4s2.4.7 3.2 1.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-		</svg>
+		<div class="brand-mark-wrap">
+			<svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+				<rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+				<path d="M5 9h2M17 9h2M5 15h2M17 15h2M12 4.5v2M12 17.5v2" stroke="var(--cyan)" stroke-width="1.3" stroke-linecap="round"/>
+				<circle cx="9" cy="10" r="2.1" fill="currentColor"/>
+				<circle cx="15.2" cy="10" r="1.6" fill="none" stroke="var(--cyan)" stroke-width="1.5"/>
+				<path d="M8 15.5c1.2 1.5 3.1 2.1 4.9 1.6 1.2-.3 2.2-1.1 2.8-2.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+			</svg>
+		</div>
 		<div class="brand-text">
-			<span class="brand-name">FaceFusion</span>
-			<span class="brand-sub">v4 WreckUI</span>
+			<span class="brand-name">FaceFusion <span class="brand-badge">v4</span></span>
+			<span class="brand-sub">WreckUI // Neural Face &amp; Stream Studio</span>
 		</div>
 	</div>
 
 	<div class="telemetry" id="telemetry" aria-label="System metrics">
-		<span class="telemetry-empty" id="telemetryEmpty">telemetry off</span>
+		<span class="telemetry-empty" id="telemetryEmpty">telemetry standby</span>
 	</div>
 
 	<div class="topbar-right">
+		<a href="ffmpeg-tools.html" class="btn btn-cyber btn-mini" title="Open standalone FFMPEG Tools page">
+			<svg viewBox="0 0 24 24" class="icon"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+			FFMPEG Tools Page ↗
+		</a>
 		<div class="session-chip" id="sessionChip" title="Session time to live">
 			<span class="dot dot-idle" id="connDot"></span>
 			<span id="connLabel">offline</span>
@@ -44,20 +51,25 @@
 	<!-- ══ Left rail: pipeline options ══ -->
 	<aside class="rail rail-left" aria-label="Pipeline options">
 		<div class="rail-head">
-			<h2>Pipeline</h2>
-			<span class="sync-state" id="syncState" title="Session state sync"></span>
+			<h2>Neural Pipeline</h2>
+			<span class="sync-state mono" id="syncState" title="Session state sync"></span>
 		</div>
 
 		<div class="processors-block">
-			<div class="block-label">Processors <span class="block-hint">run order</span></div>
-			<div class="chips" id="processorChips" role="group" aria-label="Processors"></div>
+			<div class="block-label">
+				<span>Active Processors</span>
+				<span class="block-hint">execution chain</span>
+			</div>
+			<div class="chips processor-grid" id="processorChips" role="group" aria-label="Processors"></div>
 		</div>
 
-		<input type="search" class="option-filter" id="optionFilter" placeholder="Filter options…" aria-label="Filter options">
+		<div class="filter-wrap">
+			<input type="search" class="option-filter" id="optionFilter" placeholder="Filter model &amp; pipeline parameters…" aria-label="Filter options">
+		</div>
 
 		<div class="options-groups" id="optionsGroups">
 			<div class="options-placeholder" id="optionsPlaceholder">
-				Options load from <span class="mono">/capabilities</span> once the API is reachable.
+				Options hydrate dynamically from <span class="mono">/capabilities</span> once the API is connected.
 			</div>
 		</div>
 	</aside>
@@ -65,78 +77,139 @@
 	<!-- ══ Center stage ══ -->
 	<main class="stage">
 		<nav class="tabs" role="tablist">
-			<button class="tab is-active" id="tabBtnBatch" role="tab" aria-selected="true" data-tab="batch">Batch job</button>
-			<button class="tab" id="tabBtnStream" role="tab" aria-selected="false" data-tab="stream">Live stream</button>
+			<button class="tab is-active" id="tabBtnBatch" role="tab" aria-selected="true" data-tab="batch">
+				<svg viewBox="0 0 24 24" class="icon"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+				Swap &amp; Enhance Studio
+			</button>
+			<button class="tab" id="tabBtnStream" role="tab" aria-selected="false" data-tab="stream">
+				<svg viewBox="0 0 24 24" class="icon"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+				Real-Time Stream
+			</button>
+			<button class="tab tab-toolkit" id="tabBtnToolkit" role="tab" aria-selected="false" data-tab="toolkit">
+				<svg viewBox="0 0 24 24" class="icon"><path d="m15 5 4 4M6 15l-3 3v3h3l3-3m-3-3 9.5-9.5a2.1 2.1 0 0 1 3 3L9 18l-3-3Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+				FFMPEG Toolkit
+				<span class="tab-pill">moov + split</span>
+			</button>
 		</nav>
 
-		<!-- Batch -->
+		<!-- ══ TAB 1: Batch Studio ══ -->
 		<section id="tabBatch" role="tabpanel">
+			<div class="auto-fix-banner">
+				<div class="auto-fix-info">
+					<span class="pulse-cyan"></span>
+					<span><strong>Auto Faststart Guard Active:</strong> MP4/MOV uploads with trailing <code class="mono">moov</code> atoms are automatically repaired in-memory (<code class="mono">-movflags +faststart</code>) before hitting the API.</span>
+				</div>
+				<label class="switch switch-compact" title="Automatically download the repaired _f.mp4 file to your computer whenever an upload gets auto-fixed">
+					<input type="checkbox" id="chkAutoDownloadFix">
+					<span class="track"></span>
+					<span class="switch-label">Auto-save <code class="mono">_f.mp4</code> to disk</span>
+				</label>
+			</div>
+
 			<div class="io-grid">
 				<div class="io-block">
 					<div class="io-head">
-						<span>Source <span class="io-hint">faces to take</span></span>
-						<button class="btn btn-mini btn-ghost" id="btnSourceFaces" hidden>Faces</button>
+						<span class="io-title">
+							<svg viewBox="0 0 24 24" class="icon icon-cyan"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 20c1.5-3.5 4.2-5 7-5s5.5 1.5 7 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+							Source Identity <span class="io-hint">faces / voice to extract</span>
+						</span>
+						<button class="btn btn-mini btn-cyber" id="btnSourceFaces" hidden>
+							<svg viewBox="0 0 24 24" class="icon"><path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2m8-16h2a2 2 0 0 1 2 2v2m-4 12h2a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+							Scan Faces
+						</button>
 					</div>
-					<div class="dropzone" id="zoneSource" tabindex="0" role="button" aria-label="Upload source images or videos">
-						<input type="file" id="inputSource" accept="image/*,video/*" multiple hidden>
+					<div class="dropzone" id="zoneSource" tabindex="0" role="button" aria-label="Upload source images, audio, or videos">
+						<div class="reticle reticle-tl"></div><div class="reticle reticle-tr"></div>
+						<div class="reticle reticle-bl"></div><div class="reticle reticle-br"></div>
+						<input type="file" id="inputSource" accept="image/*,video/*,audio/*" multiple hidden>
 						<div class="dropzone-empty" id="sourceEmpty">
-							<svg viewBox="0 0 24 24" class="icon icon-lg"><path d="M12 16V4m0 0 4 4m-4-4L8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-							<p>Drop source images<br><span>or click to browse — multiple allowed</span></p>
+							<div class="dropzone-orb">
+								<svg viewBox="0 0 24 24" class="icon icon-lg"><path d="M12 16V4m0 0 4 4m-4-4L8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+							</div>
+							<p>Drop source face images or audio<br><span>click to browse · multi-face blending supported</span></p>
 						</div>
 						<div class="asset-thumbs" id="sourceThumbs"></div>
-						<div class="dropzone-loading" id="sourceLoading" hidden><span class="spinner"></span>Uploading…</div>
+						<div class="dropzone-loading" id="sourceLoading" hidden>
+							<div class="scan-laser"></div>
+							<span class="spinner"></span>
+							<span id="sourceLoadingText">Uploading &amp; verifying atoms…</span>
+						</div>
 					</div>
 				</div>
 
 				<div class="io-arrow" aria-hidden="true">
-					<svg viewBox="0 0 24 24" class="icon"><path d="M4 12h15m0 0-5-5m5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+					<div class="io-connector">
+						<svg viewBox="0 0 24 24" class="icon"><path d="M4 12h15m0 0-5-5m5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+					</div>
 				</div>
 
 				<div class="io-block">
 					<div class="io-head">
-						<span>Target <span class="io-hint">where faces go</span></span>
-						<button class="btn btn-mini btn-ghost" id="btnTargetFaces" hidden>Faces</button>
+						<span class="io-title">
+							<svg viewBox="0 0 24 24" class="icon icon-accent"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m10 9 5 3-5 3V9Z" fill="currentColor"/></svg>
+							Target Media <span class="io-hint">destination frame or video</span>
+						</span>
+						<button class="btn btn-mini btn-cyber" id="btnTargetFaces" hidden>
+							<svg viewBox="0 0 24 24" class="icon"><path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2m8-16h2a2 2 0 0 1 2 2v2m-4 12h2a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+							Scan Faces
+						</button>
 					</div>
 					<div class="dropzone" id="zoneTarget" tabindex="0" role="button" aria-label="Upload target image or video">
+						<div class="reticle reticle-tl"></div><div class="reticle reticle-tr"></div>
+						<div class="reticle reticle-bl"></div><div class="reticle reticle-br"></div>
 						<input type="file" id="inputTarget" accept="image/*,video/*" hidden>
 						<div class="dropzone-empty" id="targetEmpty">
-							<svg viewBox="0 0 24 24" class="icon icon-lg"><path d="M12 16V4m0 0 4 4m-4-4L8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-							<p>Drop target image or video<br><span>or click to browse</span></p>
+							<div class="dropzone-orb orb-accent">
+								<svg viewBox="0 0 24 24" class="icon icon-lg"><path d="M12 16V4m0 0 4 4m-4-4L8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+							</div>
+							<p>Drop target image or MP4/MOV video<br><span>auto-fixes trailing <code class="mono">moov</code> atoms on drop</span></p>
 						</div>
 						<div class="asset-thumbs" id="targetThumbs"></div>
-						<div class="dropzone-loading" id="targetLoading" hidden><span class="spinner"></span>Uploading…</div>
+						<div class="dropzone-loading" id="targetLoading" hidden>
+							<div class="scan-laser"></div>
+							<span class="spinner"></span>
+							<span id="targetLoadingText">Uploading &amp; verifying atoms…</span>
+						</div>
 					</div>
 				</div>
 			</div>
 
 			<div class="runbar">
 				<button class="btn btn-primary btn-run" id="btnRun" disabled>
+					<span class="btn-glow"></span>
 					<svg viewBox="0 0 24 24" class="icon"><path d="M7 4.8v14.4c0 .9 1 1.5 1.8 1L20 13a1.2 1.2 0 0 0 0-2L8.8 3.9c-.8-.5-1.8 0-1.8 1Z" fill="currentColor"/></svg>
-					Run pipeline
+					<span>Execute Neural Pipeline</span>
 				</button>
-				<span class="runbar-hint" id="runHint">Connect to the API, then add a target.</span>
+				<div class="runbar-meta">
+					<span class="runbar-hint mono" id="runHint">Connect to the API, then add a target.</span>
+				</div>
 			</div>
 
 			<div class="output-stage">
 				<div class="output-head">
-					<span>Output</span>
+					<span class="output-title">
+						<span class="dot dot-cyan"></span>
+						Synthesis Output Monitor
+					</span>
 					<div class="output-tools">
 						<div class="view-switch" id="viewSwitch" hidden>
-							<button class="view-btn is-active" id="viewResult">Result</button>
-							<button class="view-btn" id="viewCompare">Compare</button>
+							<button class="view-btn is-active" id="viewResult">Synthesized</button>
+							<button class="view-btn" id="viewCompare">Split Wipe Compare</button>
 						</div>
-						<a class="btn btn-mini btn-ghost" id="btnDownload" hidden download>
+						<a class="btn btn-mini btn-cyber" id="btnDownload" hidden download>
 							<svg viewBox="0 0 24 24" class="icon"><path d="M12 4v12m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-							Download
+							Download Result
 						</a>
 					</div>
 				</div>
 				<div class="output-canvas" id="outputCanvas">
 					<div class="output-empty" id="outputEmpty">
+						<svg viewBox="0 0 24 24" class="icon icon-xl"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="m4 7 8 4 8-4M12 11v10" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
 						<p>Processed media lands here.</p>
-						<p class="output-empty-sub" id="outputEmptySub">Source + target → run → result.</p>
+						<p class="output-empty-sub mono" id="outputEmptySub">Source + Target → Execute → Neural Output</p>
 					</div>
 					<div class="output-progress" id="outputProgress" hidden>
+						<div class="scan-laser"></div>
 						<span class="spinner spinner-lg"></span>
 						<div class="output-progress-text">
 							<strong id="jobPhase">Queued</strong>
@@ -154,29 +227,146 @@
 			</div>
 		</section>
 
-		<!-- Live stream -->
+		<!-- ══ TAB 2: Live Stream ══ -->
 		<section id="tabStream" role="tabpanel" hidden>
 			<div class="stream-controls">
-				<button class="btn btn-primary" id="btnStreamStart">
+				<button class="btn btn-primary btn-run" id="btnStreamStart">
 					<svg viewBox="0 0 24 24" class="icon"><path d="M15 10.5 19.5 7v10L15 13.5M4 7h9a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-					Start webcam
+					Start Live Webcam Swap
 				</button>
-				<button class="btn" id="btnStreamImage">Send an image</button>
+				<button class="btn btn-cyber" id="btnStreamImage">Send Single Frame</button>
 				<input type="file" id="inputStreamImage" accept="image/*" hidden>
-				<button class="btn btn-ghost" id="btnStreamStop" hidden>Stop</button>
+				<button class="btn btn-danger" id="btnStreamStop" hidden>Stop Stream</button>
 				<span class="stream-fps mono" id="streamFps"></span>
-				<span class="stream-note">Uses the selected source and pipeline options.</span>
+				<span class="stream-note">Streams frames over WebSocket <code class="mono">/stream</code> using active source face &amp; processors.</span>
 			</div>
 			<div class="stream-grid">
 				<div class="stream-pane">
-					<div class="stream-pane-label">Camera in</div>
+					<div class="stream-pane-label">CAMERA INPUT</div>
 					<video id="streamInput" class="stream-media" muted playsinline></video>
-					<div class="stream-empty" id="streamInputEmpty">webcam off</div>
+					<div class="stream-empty mono" id="streamInputEmpty">webcam standby</div>
 				</div>
 				<div class="stream-pane">
-					<div class="stream-pane-label">Processed out</div>
+					<div class="stream-pane-label">NEURAL STREAM OUTPUT</div>
 					<img id="streamOutput" class="stream-media" alt="Processed stream" hidden>
-					<div class="stream-empty" id="streamOutputEmpty">no frames yet</div>
+					<div class="stream-empty mono" id="streamOutputEmpty">awaiting frames</div>
+				</div>
+			</div>
+		</section>
+
+		<!-- ══ TAB 3: FFMPEG Toolkit ══ -->
+		<section id="tabToolkit" role="tabpanel" hidden>
+			<div class="toolkit-header">
+				<div>
+					<h1 class="toolkit-title">FFMPEG Toolkit</h1>
+					<p class="toolkit-sub">Zero-reencode binary container tools for broken <code class="mono">moov</code> atoms and <code class="mono">&gt;500 MB</code> video splitting.</p>
+				</div>
+				<div class="toolkit-cmd-box mono" title="Equivalent Windows batch terminal command">
+					<span class="cmd-label">CLI Equivalent:</span>
+					<code>for %I in (*.mp4) do ffmpeg -i "%I" -movflags faststart -c copy "%~nI_f.mp4"</code>
+				</div>
+			</div>
+
+			<div class="toolkit-grid">
+				<!-- Tool 1: Faststart Moov Atom Repair -->
+				<div class="toolkit-card">
+					<div class="toolkit-card-head">
+						<div>
+							<span class="toolkit-badge badge-cyan">TOOL 01 // MOOV ATOM SURGERY</span>
+							<h3>Faststart Video Repair (<code class="mono">_f.mp4</code>)</h3>
+						</div>
+						<div class="toolkit-actions-top">
+							<button class="btn btn-mini btn-cyber" id="btnFaststartDownloadAll" hidden>Download All (_f.mp4)</button>
+							<button class="btn btn-mini btn-ghost" id="btnFaststartClear" hidden>Clear</button>
+						</div>
+					</div>
+					<p class="toolkit-desc">
+						Fixes <code class="mono">ValueError: could not convert string to float: 'N/A'</code> and HTTP <code class="mono">415</code> errors by relocating the <code class="mono">moov</code> atom to the front of the file and recalculating all <code class="mono">stco</code>/<code class="mono">co64</code> chunk offsets.
+					</p>
+
+					<div class="dropzone toolkit-dropzone" id="zoneFaststart" tabindex="0" role="button" aria-label="Upload broken MP4 or MOV files for faststart repair">
+						<div class="reticle reticle-tl"></div><div class="reticle reticle-tr"></div>
+						<div class="reticle reticle-bl"></div><div class="reticle reticle-br"></div>
+						<input type="file" id="inputFaststart" accept="video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v,.m4a" multiple hidden>
+						<div class="dropzone-empty">
+							<div class="dropzone-orb">
+								<svg viewBox="0 0 24 24" class="icon icon-lg"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+							</div>
+							<p>Drop broken <code class="mono">.mp4</code> / <code class="mono">.mov</code> files here (Batch supported)<br><span>instantly shifts <code class="mono">moov</code> atom to front &amp; outputs <code class="mono">*_f.mp4</code></span></p>
+						</div>
+					</div>
+
+					<div class="toolkit-results" id="faststartList">
+						<div class="toolkit-empty mono" id="faststartEmpty">No repaired files yet — drop one or more MP4 files above.</div>
+					</div>
+				</div>
+
+				<!-- Tool 2: >500 MB Lossless Video Splitter -->
+				<div class="toolkit-card">
+					<div class="toolkit-card-head">
+						<div>
+							<span class="toolkit-badge badge-orange">TOOL 02 // API 512 MiB BYPASS</span>
+							<h3>Lossless Keyframe Video Splitter (<code class="mono">-c copy</code>)</h3>
+						</div>
+						<div class="toolkit-actions-top">
+							<button class="btn btn-mini btn-cyber" id="btnSplitDownloadAll" hidden>Download All Parts</button>
+							<button class="btn btn-mini btn-ghost" id="btnSplitClear" hidden>Clear</button>
+						</div>
+					</div>
+					<p class="toolkit-desc">
+						Slices oversized videos (<code class="mono">&gt;500 MB</code>) on exact keyframe boundaries with zero quality loss and places <code class="mono">moov</code> at the front of every segment so each part uploads cleanly.
+					</p>
+
+					<div class="split-controls">
+						<div class="split-mode-group" role="group" aria-label="Split mode">
+							<button class="chip is-on" id="splitModeSize" data-mode="size" type="button">Fit &lt;500 MB API Limit</button>
+							<button class="chip" id="splitModeDuration" data-mode="duration" type="button">By Segment Duration</button>
+							<button class="chip" id="splitModeRange" data-mode="range" type="button">Custom Time Trim</button>
+						</div>
+
+						<div class="split-param-row" id="splitParamSize">
+							<label class="opt-label">
+								<span>Max Segment Size</span>
+								<span class="opt-value mono" id="splitSizeVal">450 MB</span>
+							</label>
+							<input type="range" id="splitSizeSlider" min="50" max="495" step="5" value="450">
+						</div>
+
+						<div class="split-param-row" id="splitParamDuration" hidden>
+							<label class="opt-label">
+								<span>Segment Duration (seconds)</span>
+								<span class="opt-value mono" id="splitDurVal">60s</span>
+							</label>
+							<input type="range" id="splitDurSlider" min="10" max="600" step="5" value="60">
+						</div>
+
+						<div class="split-param-row split-range-inputs" id="splitParamRange" hidden>
+							<label class="field-inline">
+								<span>Start (sec)</span>
+								<input type="number" id="splitTrimStart" min="0" step="0.5" value="0" class="mono">
+							</label>
+							<label class="field-inline">
+								<span>End (sec)</span>
+								<input type="number" id="splitTrimEnd" min="1" step="0.5" value="60" class="mono">
+							</label>
+						</div>
+					</div>
+
+					<div class="dropzone toolkit-dropzone" id="zoneSplit" tabindex="0" role="button" aria-label="Upload large MP4 video to split into segments">
+						<div class="reticle reticle-tl"></div><div class="reticle reticle-tr"></div>
+						<div class="reticle reticle-bl"></div><div class="reticle reticle-br"></div>
+						<input type="file" id="inputSplit" accept="video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v" hidden>
+						<div class="dropzone-empty">
+							<div class="dropzone-orb orb-accent">
+								<svg viewBox="0 0 24 24" class="icon icon-lg"><circle cx="6" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+							</div>
+							<p>Drop oversized <code class="mono">.mp4</code> / <code class="mono">.mov</code> video to split<br><span>lossless stream copy · auto-faststart on every segment</span></p>
+						</div>
+					</div>
+
+					<div class="toolkit-results" id="splitList">
+						<div class="toolkit-empty mono" id="splitEmpty">No segments generated yet — configure split mode and drop a video.</div>
+					</div>
 				</div>
 			</div>
 		</section>
@@ -185,13 +375,13 @@
 	<!-- ══ Right rail: jobs ══ -->
 	<aside class="rail rail-right" aria-label="Jobs">
 		<div class="rail-head">
-			<h2>Jobs</h2>
+			<h2>Job Queue</h2>
 			<button class="btn btn-mini btn-ghost" id="btnJobsRefresh" aria-label="Refresh jobs" title="Refresh jobs">
 				<svg viewBox="0 0 24 24" class="icon"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 3v4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
 			</button>
 		</div>
 		<div class="jobs-list" id="jobsList">
-			<div class="jobs-empty" id="jobsEmpty">No jobs yet.<br>Run the pipeline to create one.</div>
+			<div class="jobs-empty" id="jobsEmpty">No jobs yet.<br>Execute the pipeline to queue one.</div>
 		</div>
 	</aside>
 </div>
@@ -200,7 +390,7 @@
 <div class="modal-backdrop" id="settingsModal" hidden>
 	<div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
 		<div class="modal-head">
-			<h3 id="settingsTitle">Connection</h3>
+			<h3 id="settingsTitle">API Node Connection</h3>
 			<button class="btn btn-ghost btn-mini" id="btnSettingsClose" aria-label="Close settings">✕</button>
 		</div>
 		<div class="modal-body">
@@ -218,7 +408,7 @@
 			</label>
 		</div>
 		<div class="modal-foot">
-			<button class="btn btn-primary" id="btnConnect">Connect</button>
+			<button class="btn btn-primary" id="btnConnect">Initialize Session</button>
 		</div>
 	</div>
 </div>
@@ -227,10 +417,11 @@
 <div class="modal-backdrop" id="facesModal" hidden>
 	<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="facesTitle">
 		<div class="modal-head">
-			<h3 id="facesTitle">Detected faces</h3>
+			<h3 id="facesTitle">Biometric Face Scan</h3>
 			<button class="btn btn-ghost btn-mini" id="btnFacesClose" aria-label="Close">✕</button>
 		</div>
 		<div class="modal-body modal-body-center">
+			<div class="scan-laser" id="facesLaser"></div>
 			<span class="spinner spinner-lg" id="facesLoading"></span>
 			<img id="facesImage" hidden alt="Detected faces strip">
 		</div>
