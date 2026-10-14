@@ -1,31 +1,57 @@
 
+<img width="447" height="58" alt="Schermafbeelding 2026-10-15 004408" src="https://github.com/user-attachments/assets/a968c245-674b-42db-8764-5c3ddba98164" />
 
 
-WreckUI
+FaceFusion v4 — WreckUI Neural Studio
 ---
 By DJHanceNL
 
 
-| Functions | Status                        
-|-------|-------------------------------
+ Functions     
+---
 
-https://github.com/user-attachments/assets/aae433a5-3f30-4c35-86ba-7bfb03524227
+FFMPEG-tools - working
 
+auto moov atom fix - working
 
-| 1st   |                          
-| 2nd   |    
-| 3rd   |  
-
+500mb segment cutter - working
 
 
 
 
 
 
+---
+**Main UI**
+
+<img width="2520" height="1225" alt="Schermafbeelding 2026-10-15 011358" src="https://github.com/user-attachments/assets/bcd41600-691c-49ea-b018-4a59263a4d08" />
+
+
+https://github.com/user-attachments/assets/23eb465f-0d05-4202-8627-96582ccadad9
+
+Me and my ex Jennifer Lawrence on holiday in thailand!
+
+FFMPEG-tools UI
+---
+<img width="1778" height="1127" alt="Schermafbeelding 2026-10-15 002852" src="https://github.com/user-attachments/assets/6d34fe1b-6934-4b36-b373-a8b8295ecf12" />
+
+Extra functions
+---
+<img width="1755" height="60" alt="Schermafbeelding 2026-10-15 002833" src="https://github.com/user-attachments/assets/57af3ac0-123c-40af-99aa-a39d45116a55" />
+<img width="362" height="141" alt="Schermafbeelding 2026-10-14 235230" src="https://github.com/user-attachments/assets/edb20f28-79b5-445b-98a8-59733a3cb614" />
 
 
 
 
+
+
+
+
+
+
+
+
+---
 
 
 
