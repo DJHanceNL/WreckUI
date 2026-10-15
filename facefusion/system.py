@@ -24,7 +24,7 @@ def get_metrics_set() -> Metrics:
 
 
 def detect_graphic_devices(execution_providers : List[ExecutionProvider]) -> List[GraphicDevice]:
-	if 'rocm' in execution_providers or 'migraphx' in execution_providers:
+	if 'rocm' in execution_providers or 'migraphx' in execution_providers or 'directml' in execution_providers:
 		return detect_amd_graphic_devices()
 	if 'cuda' in execution_providers or 'tensorrt' in execution_providers:
 		return detect_nvidia_graphic_devices()
@@ -118,18 +118,23 @@ def detect_nvidia_graphic_devices() -> List[GraphicDevice]:
 
 def detect_amd_graphic_devices() -> List[GraphicDevice]:
 	amd_smi_library = amd_smi_module.create_static_library()
-	graphic_devices : List[GraphicDevice] = []
+	graphic_devices: List[GraphicDevice] = []
 
 	if amd_smi_library:
 		amd_smi_library.amdsmi_init(ctypes.c_uint64(2))
 
-		rocm_core_library = rocm_core_module.create_static_library()
-		rocm_major_version = ctypes.c_uint()
-		rocm_minor_version = ctypes.c_uint()
-		rocm_patch_version = ctypes.c_uint()
+		# Handle ROCm version safely or identify DirectML on Windows
+		framework_name = 'DirectML'
+		framework_version = '1.0'
 
+		rocm_core_library = rocm_core_module.create_static_library()
 		if rocm_core_library:
+			rocm_major_version = ctypes.c_uint()
+			rocm_minor_version = ctypes.c_uint()
+			rocm_patch_version = ctypes.c_uint()
 			rocm_core_library.getROCmVersion(ctypes.byref(rocm_major_version), ctypes.byref(rocm_minor_version), ctypes.byref(rocm_patch_version))
+			framework_name = 'ROCm'
+			framework_version = f"{rocm_major_version.value}.{rocm_minor_version.value}.{rocm_patch_version.value}"
 
 		for device_handle in amd_smi_module.find_device_handles(amd_smi_library):
 			product_info = amd_smi_module.define_product_info()
@@ -149,8 +154,8 @@ def detect_amd_graphic_devices() -> List[GraphicDevice]:
 				'driver_version': '0.0.0',
 				'framework':
 				{
-					'name': 'ROCm',
-					'version': str(rocm_major_version.value) + '.' + str(rocm_minor_version.value) + '.' + str(rocm_patch_version.value)
+					'name': framework_name,
+					'version': framework_version
 				},
 				'product':
 				{
