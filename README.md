@@ -16,6 +16,7 @@ auto moov atom fix - working
 
 500mb segment cutter - working
 
+AMD GPU metrics on windows - working
 
 
 
@@ -41,6 +42,29 @@ Extra functions
 <img width="362" height="141" alt="Schermafbeelding 2026-10-14 235230" src="https://github.com/user-attachments/assets/edb20f28-79b5-445b-98a8-59733a3cb614" />
 
 
+Update 2
+---
+
+<img width="2547" height="1216" alt="Schermafbeelding 2026-10-15 220609" src="https://github.com/user-attachments/assets/ef59f66f-da7b-4c6c-a6bf-1fa9e7d7ccbf" />
+
+New Main UI
+
+<img width="2552" height="1215" alt="Schermafbeelding 2026-10-15 215724" src="https://github.com/user-attachments/assets/6132f3c2-3a77-450a-a2d8-e0d834d8b10a" />
+
+live webcam swap
+
+
+<img width="2232" height="1082" alt="Schermafbeelding 2026-10-15 184912" src="https://github.com/user-attachments/assets/b5945ebc-e00a-475f-b8c1-dc6d08f3a535" />
+
+ffmpeg tools for moov and cut to big files in segments + passthrough to target
+
+<img width="1926" height="100" alt="Schermafbeelding 2026-10-15 211741" src="https://github.com/user-attachments/assets/c3e4c35b-49d6-4793-8454-d93159d2e85e" />
+
+metrics header
+
+<img width="577" height="670" alt="Schermafbeelding 2026-10-15 211748" src="https://github.com/user-attachments/assets/664a847a-d2d5-40b8-8d9f-c1a2fde2637e" />
+
+Hardware Telemetry panel
 
 
 
