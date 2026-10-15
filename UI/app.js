@@ -2,6 +2,8 @@
    FaceFusion v4 — WreckUI Neural Console & FFMPEG Toolkit (app.js)
    Works directly from file:// via FaceFusion v4 permissive CORS headers.
    Includes:
+   - Live AMD ADL / DirectML / ROCm / CUDA GPU Telemetry SVG Area Graphs
+     (GPU Load, VRAM Usage, GPU Temperature, Disk Usage, CPU & RAM)
    - Auto MP4/MOV/M4A moov-atom faststart repair on upload (prevents HTTP 415
      & ffprobe duration='N/A' ValueError)
    - Built-in FFMPEG Toolkit tab + standalone page support:
@@ -91,6 +93,12 @@ function bindDom() {
 		'streamOutput', 'streamOutputEmpty', 'settingsModal', 'cfgUrl', 'cfgKey',
 		'cfgRemember', 'btnConnect', 'btnSettingsClose', 'facesModal',
 		'facesImage', 'facesLoading', 'btnFacesClose', 'toasts',
+		/* Hardware Telemetry Graph Deck elements */
+		'gpuTelemetryDeck', 'gpuDeviceName',
+		'cardGpuUtil', 'valGpuUtil', 'subGpuUtil', 'areaGpuUtil', 'lineGpuUtil', 'barGpuUtil',
+		'cardGpuVram', 'valGpuVram', 'subGpuVram', 'areaGpuVram', 'lineGpuVram', 'barGpuVram',
+		'cardGpuTemp', 'valGpuTemp', 'subGpuTemp', 'areaGpuTemp', 'lineGpuTemp', 'barGpuTemp',
+		'cardDiskUsage', 'valDiskUsage', 'subDiskUsage', 'areaDiskUsage', 'lineDiskUsage', 'barDiskUsage',
 		/* Toolkit elements */
 		'zoneFaststart', 'inputFaststart', 'faststartList', 'btnFaststartAll',
 		'btnFaststartDownloadAll', 'btnFaststartClear', 'chkAutoFaststart',
@@ -160,9 +168,6 @@ const Mp4Toolkit = {
 		for (let i = 0; i < 4; i++) view.setUint8(offset + i, str.charCodeAt(i) || 32);
 	},
 
-	/**
-	 * Parses top-level or nested ISO BMFF atoms/boxes in a buffer range.
-	 */
 	parseBoxes(buffer, start = 0, end = buffer.byteLength) {
 		const view = new DataView(buffer);
 		const boxes = [];
@@ -198,9 +203,6 @@ const Mp4Toolkit = {
 		return boxes;
 	},
 
-	/**
-	 * Inspects an MP4/MOV/M4A file to see where the `moov` atom sits relative to `mdat`.
-	 */
 	async inspect(file) {
 		const buffer = await file.arrayBuffer();
 		const boxes = this.parseBoxes(buffer);
@@ -247,10 +249,6 @@ const Mp4Toolkit = {
 		return { duration, timescale };
 	},
 
-	/**
-	 * Recursively walks inside `moov` and shifts all `stco` (32-bit) and `co64` (64-bit)
-	 * chunk offsets by `delta` bytes. Returns false if a 32-bit `stco` overflows 4 GiB.
-	 */
 	shiftChunkOffsets(moovBytes, delta) {
 		const buf = moovBytes.buffer.slice(moovBytes.byteOffset, moovBytes.byteOffset + moovBytes.byteLength);
 		const view = new DataView(buf);
@@ -293,10 +291,6 @@ const Mp4Toolkit = {
 		return new Uint8Array(buf);
 	},
 
-	/**
-	 * Performs lossless `-movflags +faststart` in memory.
-	 * Moves `moov` right before the first `mdat` and updates all chunk offsets.
-	 */
 	async toFaststart(file, force = false) {
 		const info = await this.inspect(file);
 		if (!info.valid) {
@@ -332,8 +326,6 @@ const Mp4Toolkit = {
 
 		const moovBox = boxes[moovIdx];
 		const rawMoov = srcBytes.subarray(moovBox.offset, moovBox.end);
-
-		// Every box between firstMdatIdx and moovIdx shifts forward by moovBox.size
 		const patchedMoov = this.shiftChunkOffsets(rawMoov, moovBox.size);
 
 		const parts = [];
@@ -360,9 +352,6 @@ const Mp4Toolkit = {
 		};
 	},
 
-	/**
-	 * Automatically checks & fixes an MP4/MOV/M4A file before uploading to FaceFusion.
-	 */
 	async ensureFaststartForUpload(file) {
 		if (!Config.autoFaststart || !this.isMp4Family(file)) {
 			return { file, repaired: false };
@@ -418,7 +407,6 @@ const Mp4Toolkit = {
 
 		if (!stsd || !stts || !stsc || !stsz || (!stco && !co64)) return null;
 
-		// 1. Sample sizes (stsz)
 		const defaultSize = view.getUint32(stsz.dataOffset + 4, false);
 		const sampleCount = view.getUint32(stsz.dataOffset + 8, false);
 		const sampleSizes = new Uint32Array(sampleCount);
@@ -430,7 +418,6 @@ const Mp4Toolkit = {
 			}
 		}
 
-		// 2. Chunk offsets (stco / co64)
 		const chunkEntryBox = stco || co64;
 		const is64 = !!co64;
 		const chunkCount = view.getUint32(chunkEntryBox.dataOffset + 4, false);
@@ -445,19 +432,17 @@ const Mp4Toolkit = {
 			}
 		}
 
-		// 3. Sample-to-chunk (stsc)
 		const stscCount = view.getUint32(stsc.dataOffset + 4, false);
 		const stscEntries = [];
 		for (let i = 0; i < stscCount; i++) {
 			const base = stsc.dataOffset + 8 + i * 12;
 			stscEntries.push({
-				firstChunk: view.getUint32(base, false), // 1-based
+				firstChunk: view.getUint32(base, false),
 				samplesPerChunk: view.getUint32(base + 4, false),
 				sampleDescIdx: view.getUint32(base + 8, false)
 			});
 		}
 
-		// 4. Time-to-sample deltas (stts)
 		const sttsCount = view.getUint32(stts.dataOffset + 4, false);
 		const sampleDeltas = new Uint32Array(sampleCount);
 		const sampleTimestamps = new Float64Array(sampleCount);
@@ -475,7 +460,6 @@ const Mp4Toolkit = {
 			}
 		}
 
-		// 5. Composition offsets (ctts) if present
 		let sampleCtts = null;
 		let cttsVersion = 0;
 		if (ctts) {
@@ -493,17 +477,15 @@ const Mp4Toolkit = {
 			}
 		}
 
-		// 6. Sync samples / keyframes (stss)
 		let syncSet = null;
 		if (stss) {
 			const syncCount = view.getUint32(stss.dataOffset + 4, false);
 			syncSet = new Set();
 			for (let i = 0; i < syncCount; i++) {
-				syncSet.add(view.getUint32(stss.dataOffset + 8 + i * 4, false) - 1); // 0-based
+				syncSet.add(view.getUint32(stss.dataOffset + 8 + i * 4, false) - 1);
 			}
 		}
 
-		// 7. Compute exact byte offset of each sample in file
 		const sampleOffsets = new Float64Array(sampleCount);
 		const sampleDescIndices = new Uint32Array(sampleCount);
 		let curSample = 0;
@@ -550,11 +532,8 @@ const Mp4Toolkit = {
 	buildSlicedTrack(buffer, track, startSample, endSample, newSampleOffsets, movieTimescale) {
 		const srcBytes = new Uint8Array(buffer);
 		const count = endSample - startSample;
-
-		// 1. stsd (unchanged)
 		const stsdBytes = srcBytes.subarray(track.stsd.offset, track.stsd.end);
 
-		// 2. stts (run-length encoded deltas)
 		const sttsRuns = [];
 		for (let i = startSample; i < endSample; i++) {
 			const d = track.sampleDeltas[i];
@@ -573,7 +552,6 @@ const Mp4Toolkit = {
 		});
 		const sttsBox = this.makeBox('stts', [sttsPayload]);
 
-		// 3. ctts (if present)
 		const extraStbl = [];
 		if (track.sampleCtts) {
 			const cttsRuns = [];
@@ -596,7 +574,6 @@ const Mp4Toolkit = {
 			extraStbl.push(this.makeBox('ctts', [cttsPayload]));
 		}
 
-		// 4. stss (if video has sync samples)
 		if (track.syncSet) {
 			const syncList = [];
 			for (let i = startSample; i < endSample; i++) {
@@ -609,7 +586,6 @@ const Mp4Toolkit = {
 			extraStbl.push(this.makeBox('stss', [stssPayload]));
 		}
 
-		// 5. stsc (1 sample per chunk for simplicity and universal compatibility)
 		const stscPayload = new Uint8Array(8 + 12);
 		const stscView = new DataView(stscPayload.buffer);
 		stscView.setUint32(4, 1, false);
@@ -618,7 +594,6 @@ const Mp4Toolkit = {
 		stscView.setUint32(16, track.sampleDescIndices[startSample] || 1, false);
 		const stscBox = this.makeBox('stsc', [stscPayload]);
 
-		// 6. stsz
 		const stszPayload = new Uint8Array(12 + count * 4);
 		const stszView = new DataView(stszPayload.buffer);
 		stszView.setUint32(4, 0, false);
@@ -628,7 +603,6 @@ const Mp4Toolkit = {
 		}
 		const stszBox = this.makeBox('stsz', [stszPayload]);
 
-		// 7. stco (32-bit chunk offsets; 1 chunk per sample)
 		const stcoPayload = new Uint8Array(8 + count * 4);
 		const stcoView = new DataView(stcoPayload.buffer);
 		stcoView.setUint32(4, count, false);
@@ -639,17 +613,14 @@ const Mp4Toolkit = {
 
 		const stblBox = this.makeBox('stbl', [stsdBytes, sttsBox, ...extraStbl, stscBox, stszBox, stcoBox]);
 
-		// Rebuild minf (keep non-stbl children like vmhd/smhd/dinf)
 		const minfChildren = this.parseBoxes(buffer, track.minf.dataOffset, track.minf.end)
 			.filter(b => b.type !== 'stbl')
 			.map(b => srcBytes.subarray(b.offset, b.end));
 		const minfBox = this.makeBox('minf', [...minfChildren, stblBox]);
 
-		// Compute track segment duration
 		let segTrackDuration = 0;
 		for (let i = startSample; i < endSample; i++) segTrackDuration += track.sampleDeltas[i];
 
-		// Patch mdhd duration
 		const mdhdCopy = new Uint8Array(srcBytes.subarray(track.mdhd.offset, track.mdhd.end));
 		const mdhdView = new DataView(mdhdCopy.buffer);
 		const mdhdVer = mdhdView.getUint8(8);
@@ -663,7 +634,6 @@ const Mp4Toolkit = {
 		const hdlrCopy = srcBytes.subarray(track.hdlr.offset, track.hdlr.end);
 		const mdiaBox = this.makeBox('mdia', [mdhdCopy, hdlrCopy, minfBox]);
 
-		// Patch tkhd duration (in movieTimescale units)
 		const tkhdCopy = new Uint8Array(srcBytes.subarray(track.tkhd.offset, track.tkhd.end));
 		const tkhdView = new DataView(tkhdCopy.buffer);
 		const tkhdVer = tkhdView.getUint8(8);
@@ -681,11 +651,6 @@ const Mp4Toolkit = {
 		};
 	},
 
-	/**
-	 * Splits an MP4 file losslessly on video keyframes into segments with `moov` at the front.
-	 * @param {File} file
-	 * @param {Object} opts - { mode: 'size' | 'duration', maxBytes: number, segmentSeconds: number }
-	 */
 	async splitMp4(file, { mode = 'size', maxBytes = 450 * 1024 * 1024, segmentSeconds = 60 } = {}) {
 		const buffer = await file.arrayBuffer();
 		const srcBytes = new Uint8Array(buffer);
@@ -711,7 +676,6 @@ const Mp4Toolkit = {
 			throw new Error('No splittable video track found in container.');
 		}
 
-		// Collect candidate split points (keyframes on video track, or every 30 samples if no stss)
 		const keyframes = [];
 		if (videoTrack.syncSet && videoTrack.syncSet.size > 1) {
 			for (let i = 0; i < videoTrack.sampleCount; i++) {
@@ -722,7 +686,6 @@ const Mp4Toolkit = {
 		}
 		if (keyframes[0] !== 0) keyframes.unshift(0);
 
-		// Determine segment intervals [startTimeSec, endTimeSec]
 		const segmentsMeta = [];
 		let segStartIdx = 0;
 
@@ -733,7 +696,7 @@ const Mp4Toolkit = {
 				const s1 = this.findSampleAtTime(tr, tEndSec, true);
 				for (let i = s0; i < s1; i++) bytes += tr.sampleSizes[i];
 			}
-			return bytes + 512 * 1024; // +512 KB margin for headers
+			return bytes + 512 * 1024;
 		};
 
 		for (let k = 1; k < keyframes.length; k++) {
@@ -754,7 +717,7 @@ const Mp4Toolkit = {
 					const tPrev = videoTrack.sampleTimestamps[prevSample] / videoTrack.timescale;
 					segmentsMeta.push({ vStart: startSample, vEnd: prevSample, tStart, tEnd: tPrev });
 					segStartIdx = k - 1;
-					k--; // re-evaluate from new start
+					k--;
 				} else if (estBytes >= maxBytes) {
 					segmentsMeta.push({ vStart: startSample, vEnd: candSample, tStart, tEnd: tCand });
 					segStartIdx = k;
@@ -762,7 +725,6 @@ const Mp4Toolkit = {
 			}
 		}
 
-		// Final remaining segment
 		const finalStartSample = keyframes[segStartIdx];
 		const finalStartSec = videoTrack.sampleTimestamps[finalStartSample] / videoTrack.timescale;
 		const finalEndSec = videoTrack.totalDurationUnits / videoTrack.timescale;
@@ -773,7 +735,6 @@ const Mp4Toolkit = {
 			tEnd: finalEndSec
 		});
 
-		// Build standalone faststart MP4 file for each segment
 		const ftypBytes = srcBytes.subarray(ftyp.offset, ftyp.end);
 		const baseStem = file.name.replace(/\.[^.]+$/, '');
 		const extMatch = file.name.match(/\.[^.]+$/);
@@ -795,7 +756,6 @@ const Mp4Toolkit = {
 				};
 			});
 
-			// Calculate relative offsets inside new mdat payload
 			let mdatPayloadSize = 0;
 			const relativeOffsetsPerTrack = [];
 			for (const slice of trackSlices) {
@@ -808,7 +768,6 @@ const Mp4Toolkit = {
 				relativeOffsetsPerTrack.push(relOffsets);
 			}
 
-			// First pass: build dummy moov with 0-based offsets to measure exact moov byteLength
 			const dummyTraks = trackSlices.map((slice, tIdx) =>
 				this.buildSlicedTrack(buffer, slice.track, slice.s0, slice.s1, relativeOffsetsPerTrack[tIdx], movieTimescale)
 			);
@@ -828,11 +787,8 @@ const Mp4Toolkit = {
 			const dummyMoov = this.makeBox('moov', [mvhdCopy, ...dummyTraks.map(d => d.trakBox)]);
 			const mdatHeaderSize = 8;
 			const baseDataOffset = ftypBytes.byteLength + dummyMoov.byteLength + mdatHeaderSize;
-
-			// Second pass: shift moov chunk offsets by baseDataOffset so moov sits at the front (faststart!)
 			const finalMoov = this.shiftChunkOffsets(dummyMoov, baseDataOffset);
 
-			// Assemble mdat box header + sample slices
 			const mdatHeader = new Uint8Array(8);
 			const mdatHeaderView = new DataView(mdatHeader.buffer);
 			mdatHeaderView.setUint32(0, 8 + mdatPayloadSize, false);
@@ -906,10 +862,6 @@ function triggerDownload(blobOrFile, filename) {
 	setTimeout(() => URL.revokeObjectURL(url), 15000);
 }
 
-/**
- * Extracts the first JPEG frame from a `multipart/mixed` stream (FaceFusion v4 update)
- * or returns the raw blob if it's already `image/jpeg`.
- */
 async function extractCaptureBlob(res) {
 	const ct = (res.headers.get('content-type') || '').toLowerCase();
 	const rawBlob = await res.blob();
@@ -917,7 +869,6 @@ async function extractCaptureBlob(res) {
 
 	const buf = await rawBlob.arrayBuffer();
 	const bytes = new Uint8Array(buf);
-	// Locate JPEG SOI (0xFF 0xD8 0xFF) and EOI (0xFF 0xD9)
 	let start = -1;
 	for (let i = 0; i < bytes.length - 2; i++) {
 		if (bytes[i] === 0xFF && bytes[i + 1] === 0xD8 && bytes[i + 2] === 0xFF) {
@@ -1122,13 +1073,72 @@ function setConnection(state) {
 	if (dom.btnDisconnect) dom.btnDisconnect.hidden = state !== 'online';
 }
 
-/* ── Telemetry (WS /metrics) ─────────────────────────────────────────────── */
+/* ==========================================================================
+   TELEMETRY & LIVE SVG HARDWARE GRAPHS (GPU Load, VRAM, Temp, Disk, CPU, RAM)
+   ========================================================================== */
 const Telemetry = {
 	ws: null,
+	maxPoints: 36,
+	history: {
+		gpuUtil: [],
+		gpuVram: [],
+		gpuTemp: [],
+		diskUtil: [],
+		cpuUtil: [],
+		ramUtil: []
+	},
+
+	resetHistory() {
+		for (const k of Object.keys(this.history)) {
+			this.history[k] = [];
+		}
+	},
+
+	pushPoint(key, val) {
+		const arr = this.history[key];
+		if (!arr) return;
+		const clamped = Math.max(0, Math.min(100, Number.isFinite(val) ? val : 0));
+		if (arr.length === 0) {
+			// Seed initial baseline so the SVG graph renders a full line immediately
+			for (let i = 0; i < 6; i++) arr.push(clamped);
+		} else {
+			arr.push(clamped);
+			if (arr.length > this.maxPoints) arr.shift();
+		}
+	},
+
+	buildSvgPaths(points, width = 120, height = 34) {
+		if (!points || !points.length) {
+			return {
+				line: `M0,${height - 1} L${width},${height - 1}`,
+				area: `M0,${height} L${width},${height} Z`
+			};
+		}
+		const len = points.length;
+		const stepX = len > 1 ? width / (len - 1) : width;
+		const padTop = 3;
+		const padBot = 2;
+		const usableH = height - padTop - padBot;
+
+		const coords = points.map((v, idx) => {
+			const pct = Math.max(0, Math.min(100, v));
+			const x = +(idx * stepX).toFixed(1);
+			const y = +(padTop + usableH * (1 - pct / 100)).toFixed(1);
+			return [x, y];
+		});
+
+		const line = 'M' + coords.map(pt => `${pt[0]},${pt[1]}`).join(' L');
+		const area = `${line} L${width},${height} L0,${height} Z`;
+		return { line, area };
+	},
 
 	start() {
 		this.stop();
-		if (!dom.telemetry) return;
+		// Perform an immediate HTTP GET /metrics so charts populate without waiting 2s
+		Api.get('/metrics').then(m => {
+			if (m) this.render(m);
+		}).catch(() => { /* ignore */ });
+
 		try {
 			this.ws = Api.openSocket('/metrics');
 		} catch { return; }
@@ -1151,48 +1161,191 @@ const Telemetry = {
 			try { this.ws.close(); } catch { /* ignore */ }
 			this.ws = null;
 		}
+		this.resetHistory();
 		if (dom.telemetry && dom.telemetryEmpty) {
 			dom.telemetry.innerHTML = '';
 			dom.telemetry.appendChild(dom.telemetryEmpty);
 			dom.telemetryEmpty.hidden = false;
 		}
+		if (dom.gpuDeviceName) {
+			dom.gpuDeviceName.textContent = 'standby';
+			dom.gpuDeviceName.classList.remove('is-live');
+		}
 	},
 
 	render(m) {
-		if (!dom.telemetry) return;
-		const chips = [];
-		const pct = v => v && typeof v.value === 'number' ? Math.round(v.value) : null;
-		if (Array.isArray(m.graphic_devices)) {
-			for (const g of m.graphic_devices) {
-				const u = pct(g.utilization?.gpu ?? g.utilization);
-				const mem = g.memory && g.memory.used && g.memory.total
-					? `${g.memory.used.value}/${g.memory.total.value}${g.memory.total.unit || ''}`
-					: '';
-				const tempVal = g.temperature?.gpu?.value ?? g.temperature?.value;
-				const temp = tempVal !== undefined ? ` ${Math.round(tempVal)}°C` : '';
-				chips.push(this.chip('GPU', u !== null ? `<b>${u}%</b>` : '<b>—</b>', u, `${mem}${temp}`));
+		if (!m) return;
+		const num = v => (v && typeof v.value === 'number' && Number.isFinite(v.value)) ? v.value : null;
+
+		const gpu = Array.isArray(m.graphic_devices) && m.graphic_devices.length ? m.graphic_devices[0] : null;
+		const disk = Array.isArray(m.disks) && m.disks.length ? m.disks[0] : null;
+
+		// 1. Extract GPU Metrics (from custom amd_smi.py ADL wrapper or NVML)
+		const gpuUtil = gpu ? (num(gpu.utilization?.gpu) ?? num(gpu.utilization) ?? 0) : null;
+		const vramUsed = gpu ? num(gpu.memory?.used) : null;
+		const vramTotal = gpu ? num(gpu.memory?.total) : null;
+		const vramUnit = gpu?.memory?.total?.unit || 'GB';
+		const vramPct = (vramUsed !== null && vramTotal && vramTotal > 0)
+			? Math.min(100, Math.round((vramUsed / vramTotal) * 100))
+			: (gpu ? (num(gpu.utilization?.memory) ?? 0) : null);
+		const gpuTemp = gpu ? (num(gpu.temperature?.gpu) ?? num(gpu.temperature)) : null;
+		const gpuName = gpu?.product?.name ? gpu.product.name.trim() : null;
+		const gpuFramework = gpu?.framework?.name || 'ADL';
+
+		// 2. Extract Disk Metrics
+		const diskUtil = disk ? num(disk.utilization) : null;
+		const diskFree = disk ? num(disk.free) : null;
+		const diskTotal = disk ? num(disk.total) : null;
+		const diskUnit = disk?.total?.unit || 'GB';
+
+		// 3. Extract CPU & RAM Metrics
+		const cpuUtil = m.processor ? num(m.processor.utilization) : null;
+		const ramUtil = m.memory ? num(m.memory.utilization) : null;
+		const ramFree = m.memory ? num(m.memory.free) : null;
+		const ramTotal = m.memory ? num(m.memory.total) : null;
+
+		// Push to rolling history buffers
+		this.pushPoint('gpuUtil', gpuUtil ?? 0);
+		this.pushPoint('gpuVram', vramPct ?? 0);
+		this.pushPoint('gpuTemp', gpuTemp !== null ? Math.min(100, (gpuTemp / 105) * 100) : 0);
+		this.pushPoint('diskUtil', diskUtil ?? 0);
+		this.pushPoint('cpuUtil', cpuUtil ?? 0);
+		this.pushPoint('ramUtil', ramUtil ?? 0);
+
+		// Render Topbar Mini-Sparkline Chips
+		if (dom.telemetry) {
+			const chips = [];
+			if (gpu) {
+				const vramLabel = (vramUsed !== null && vramTotal !== null) ? `${vramUsed}/${vramTotal}${vramUnit}` : `${vramPct ?? 0}%`;
+				const tempStr = gpuTemp !== null ? `${Math.round(gpuTemp)}°C` : '—°C';
+				chips.push(this.sparkChip('GPU', `${Math.round(gpuUtil ?? 0)}%`, this.history.gpuUtil, '#00f0ff', `${gpuName || 'GPU'} · Load`));
+				chips.push(this.sparkChip('VRAM', vramLabel, this.history.gpuVram, '#ff6b2c', `VRAM Usage: ${vramLabel} (${vramPct ?? 0}%)`));
+				chips.push(this.sparkChip('TEMP', tempStr, this.history.gpuTemp, gpuTemp >= 80 ? '#ff5263' : gpuTemp >= 65 ? '#f5b942' : '#2ee59d', `GPU Temperature: ${tempStr}`));
 			}
+			if (cpuUtil !== null) {
+				chips.push(this.sparkChip('CPU', `${Math.round(cpuUtil)}%`, this.history.cpuUtil, '#38bdf8', `Processor Load: ${Math.round(cpuUtil)}%`));
+			}
+			if (ramUtil !== null) {
+				const ramUsed = (ramTotal !== null && ramFree !== null) ? (ramTotal - ramFree) : null;
+				const ramTitle = ramUsed !== null ? `RAM: ${ramUsed}/${ramTotal} GB (${Math.round(ramUtil)}%)` : `RAM: ${Math.round(ramUtil)}%`;
+				chips.push(this.sparkChip('RAM', `${Math.round(ramUtil)}%`, this.history.ramUtil, '#eab308', ramTitle));
+			}
+			if (diskUtil !== null) {
+				const diskTitle = (diskFree !== null && diskTotal !== null)
+					? `Disk: ${diskFree} ${diskUnit} free of ${diskTotal} ${diskUnit} (${Math.round(diskUtil)}% used)`
+					: `Disk Usage: ${Math.round(diskUtil)}%`;
+				chips.push(this.sparkChip('DISK', `${Math.round(diskUtil)}%`, this.history.diskUtil, '#a855f7', diskTitle));
+			}
+			dom.telemetry.innerHTML = chips.join('');
+			if (dom.telemetryEmpty) dom.telemetryEmpty.hidden = true;
 		}
-		if (m.processor) {
-			const u = pct(m.processor.utilization);
-			chips.push(this.chip('CPU', `<b>${u ?? '—'}%</b>`, u, ''));
-		}
-		if (m.memory && m.memory.utilization) {
-			const u = pct(m.memory.utilization);
-			const detail = m.memory.used && m.memory.total
-				? `${m.memory.used.value}${m.memory.used.unit || ''}`
-				: '';
-			chips.push(this.chip('RAM', `<b>${u ?? '—'}%</b>`, u, detail));
-		}
-		dom.telemetry.innerHTML = chips.join('');
-		if (dom.telemetryEmpty) dom.telemetryEmpty.hidden = true;
+
+		// Render Right-Rail Hardware Telemetry Graph Deck
+		this.renderGraphDeck({
+			gpu, gpuName, gpuFramework, gpuUtil,
+			vramUsed, vramTotal, vramUnit, vramPct,
+			gpuTemp, diskUtil, diskFree, diskTotal, diskUnit
+		});
 	},
 
-	chip(label, valueHtml, pctValue, title) {
-		const bar = pctValue !== null && pctValue !== undefined
-			? `<span class="tbar"><i style="width:${Math.min(pctValue, 100)}%"></i></span>`
-			: '';
-		return `<span class="tchip" title="${title}">${label} ${valueHtml}${bar}</span>`;
+	sparkChip(label, valText, hist, color, title) {
+		const { line, area } = this.buildSvgPaths(hist, 46, 16);
+		const pct = hist.length ? Math.round(hist[hist.length - 1]) : 0;
+		return `
+			<span class="tchip" title="${title}">
+				<span class="tchip-lbl">${label}</span>
+				<b>${valText}</b>
+				<svg viewBox="0 0 46 16" class="tchip-spark" preserveAspectRatio="none" aria-hidden="true">
+					<path d="${area}" fill="${color}" fill-opacity="0.2"></path>
+					<path d="${line}" fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round"></path>
+				</svg>
+				<span class="tbar"><i style="width:${Math.min(pct, 100)}%;background:${color}"></i></span>
+			</span>
+		`;
+	},
+
+	renderGraphDeck(d) {
+		if (!dom.gpuTelemetryDeck) return;
+
+		if (dom.gpuDeviceName) {
+			if (d.gpu && d.gpuName) {
+				dom.gpuDeviceName.textContent = d.gpuName.replace(/^AMD\s+/i, '');
+				dom.gpuDeviceName.title = `${d.gpu.product?.vendor || 'AMD'} ${d.gpuName} (${d.gpuFramework})`;
+				dom.gpuDeviceName.classList.add('is-live');
+			} else {
+				dom.gpuDeviceName.textContent = 'DirectML / CPU';
+				dom.gpuDeviceName.classList.remove('is-live');
+			}
+		}
+
+		// 1. GPU Load Card
+		const uVal = d.gpuUtil !== null ? Math.round(d.gpuUtil) : null;
+		if (dom.valGpuUtil) dom.valGpuUtil.textContent = uVal !== null ? `${uVal}%` : '—%';
+		if (dom.subGpuUtil) {
+			const memAct = d.gpu?.utilization?.memory?.value;
+			dom.subGpuUtil.textContent = d.gpu
+				? `GFX Engine${typeof memAct === 'number' ? ` · Mem ${memAct}%` : ''}`
+				: 'No GPU telemetry';
+		}
+		if (dom.barGpuUtil) dom.barGpuUtil.style.width = `${Math.min(100, uVal ?? 0)}%`;
+		const utilPaths = this.buildSvgPaths(this.history.gpuUtil);
+		if (dom.areaGpuUtil) dom.areaGpuUtil.setAttribute('d', utilPaths.area);
+		if (dom.lineGpuUtil) dom.lineGpuUtil.setAttribute('d', utilPaths.line);
+
+		// 2. VRAM Usage Card
+		const vPct = d.vramPct !== null ? Math.round(d.vramPct) : 0;
+		if (dom.valGpuVram) {
+			dom.valGpuVram.textContent = (d.vramUsed !== null && d.vramTotal !== null)
+				? `${d.vramUsed}/${d.vramTotal} ${d.vramUnit}`
+				: `${vPct}%`;
+		}
+		if (dom.subGpuVram) {
+			const freeVram = (d.vramTotal !== null && d.vramUsed !== null) ? Math.max(0, d.vramTotal - d.vramUsed) : null;
+			dom.subGpuVram.textContent = freeVram !== null
+				? `${vPct}% used · ${freeVram} ${d.vramUnit} free`
+				: 'Dedicated Video Memory';
+		}
+		if (dom.barGpuVram) dom.barGpuVram.style.width = `${Math.min(100, vPct)}%`;
+		const vramPaths = this.buildSvgPaths(this.history.gpuVram);
+		if (dom.areaGpuVram) dom.areaGpuVram.setAttribute('d', vramPaths.area);
+		if (dom.lineGpuVram) dom.lineGpuVram.setAttribute('d', vramPaths.line);
+
+		// 3. GPU Temperature Card (dynamic thermal color scaling)
+		const tVal = d.gpuTemp !== null ? Math.round(d.gpuTemp) : null;
+		const tPct = tVal !== null ? Math.min(100, Math.round((tVal / 105) * 100)) : 0;
+		const tempColor = tVal !== null && tVal >= 80 ? '#ff5263' : (tVal !== null && tVal >= 65 ? '#f5b942' : '#2ee59d');
+		if (dom.valGpuTemp) {
+			dom.valGpuTemp.textContent = tVal !== null ? `${tVal}°C` : '—°C';
+			dom.valGpuTemp.style.color = tempColor;
+		}
+		if (dom.subGpuTemp) {
+			const stateTxt = tVal === null ? 'Thermal Sensor' : (tVal >= 82 ? 'High Thermal Load' : tVal >= 65 ? 'Nominal Load' : 'Optimal Cool');
+			dom.subGpuTemp.textContent = stateTxt;
+		}
+		if (dom.barGpuTemp) {
+			dom.barGpuTemp.style.width = `${tPct}%`;
+			dom.barGpuTemp.style.background = tempColor;
+		}
+		const tempPaths = this.buildSvgPaths(this.history.gpuTemp);
+		if (dom.areaGpuTemp) dom.areaGpuTemp.setAttribute('d', tempPaths.area);
+		if (dom.lineGpuTemp) {
+			dom.lineGpuTemp.setAttribute('d', tempPaths.line);
+			dom.lineGpuTemp.setAttribute('stroke', tempColor);
+		}
+
+		// 4. Disk Usage Card
+		const dPct = d.diskUtil !== null ? Math.round(d.diskUtil) : null;
+		if (dom.valDiskUsage) dom.valDiskUsage.textContent = dPct !== null ? `${dPct}%` : '—%';
+		if (dom.subDiskUsage) {
+			const usedDisk = (d.diskTotal !== null && d.diskFree !== null) ? Math.max(0, d.diskTotal - d.diskFree) : null;
+			dom.subDiskUsage.textContent = (d.diskFree !== null && d.diskTotal !== null)
+				? `${d.diskFree} ${d.diskUnit} free (${usedDisk}/${d.diskTotal} ${d.diskUnit})`
+				: ' Scratch / Output Drive';
+		}
+		if (dom.barDiskUsage) dom.barDiskUsage.style.width = `${Math.min(100, dPct ?? 0)}%`;
+		const diskPaths = this.buildSvgPaths(this.history.diskUtil);
+		if (dom.areaDiskUsage) dom.areaDiskUsage.setAttribute('d', diskPaths.area);
+		if (dom.lineDiskUsage) dom.lineDiskUsage.setAttribute('d', diskPaths.line);
 	}
 };
 
@@ -1609,12 +1762,6 @@ const Assets = {
 		return App.assets.filter(a => a.type === type);
 	},
 
-	/**
-	 * Uploads files to `/assets?type=source|target`.
-	 * Automatically checks MP4/MOV/M4A files for end-of-file `moov` atoms and
-	 * applies `-movflags +faststart` byte-reordering before uploading, AND
-	 * retries with a forced faststart rebuild if the server returns 415.
-	 */
 	async upload(type, files) {
 		if (!files || !files.length) return;
 		if (!Session.connected) {
@@ -1623,7 +1770,6 @@ const Assets = {
 			return;
 		}
 
-		// Check 512 MiB API limit upfront
 		const oversized = files.find(f => f.size > 512 * 1024 * 1024);
 		if (oversized) {
 			toast(`"${oversized.name}" (${formatBytes(oversized.size)}) exceeds the 512 MiB API limit. Opening FFMPEG Toolkit Splitter…`, 'warn', 6000);
@@ -1665,7 +1811,6 @@ const Assets = {
 			try {
 				res = await Api.upload(`/assets?type=${type}`, form);
 			} catch (err) {
-				// Fallback: if upload failed with 415 and we haven't forced a faststart pass yet
 				if (err.status === 415 && files.some(f => Mp4Toolkit.isMp4Family(f))) {
 					setLoadText('Repairing MP4 moov atom (faststart)…');
 					toast('Upload rejected (415) — running automatic faststart moov repair…', 'warn');
@@ -2278,7 +2423,6 @@ const Toolkit = {
 					item.error = info.reason;
 				} else {
 					item.needsFix = info.needsFaststart;
-					// Immediately run faststart repair
 					item.status = 'repairing';
 					this.renderFaststartList();
 					const res = await Mp4Toolkit.toFaststart(file, true);
@@ -2532,8 +2676,8 @@ function switchTab(name) {
 }
 
 /**
- * Dynamically injects the AI/Faceswap visual polish and FFMPEG Toolkit UI
- * if the user opens an older `index.html` or `styles.css` that lacks them.
+ * Dynamically injects the AI/Faceswap visual polish, Hardware Telemetry Graph Deck,
+ * and FFMPEG Toolkit UI if the user opens an older HTML/CSS file.
  */
 function ensureModernUiAndToolkit() {
 	if (!$('ffNeuralStyles')) {
@@ -2544,6 +2688,7 @@ function ensureModernUiAndToolkit() {
 				--accent-cyan: #00f0ff;
 				--accent-glow: rgba(255, 107, 44, 0.35);
 				--cyan-dim: rgba(0, 240, 255, 0.11);
+				--purple: #a855f7;
 			}
 			.topbar {
 				background: linear-gradient(180deg, #191920 0%, #121216 100%);
@@ -2552,197 +2697,170 @@ function ensureModernUiAndToolkit() {
 			.brand-mark {
 				filter: drop-shadow(0 0 8px rgba(255, 107, 44, .55));
 			}
-			.chip-proc, .ogroup-title {
+			/* Topbar Sparkline Chips */
+			.tchip {
 				display: inline-flex;
 				align-items: center;
 				gap: 6px;
+				padding: 4px 9px;
+				background: rgba(24, 27, 38, .92);
+				border: 1px solid var(--line);
+				border-radius: var(--radius-sm);
 			}
-			.p-ico {
-				width: 14px;
-				height: 14px;
+			.tchip-lbl {
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .04em;
+				color: var(--text-3);
+			}
+			.tchip-spark {
+				width: 42px;
+				height: 15px;
+				overflow: visible;
+			}
+			/* Right-Rail Hardware Telemetry Graph Deck */
+			.telemetry-deck {
 				flex: none;
-				opacity: .85;
-			}
-			.chip.is-on {
-				box-shadow: 0 0 12px rgba(255, 107, 44, .22), inset 0 0 6px rgba(255, 107, 44, .12);
-			}
-			.btn-run:not(:disabled) {
-				background: linear-gradient(135deg, #ff6b2c 0%, #ff3d71 100%);
-				border-color: #ff8046;
-				color: #fff;
-				box-shadow: 0 0 18px rgba(255, 107, 44, .45);
-				transition: transform .12s, box-shadow .2s;
-			}
-			.btn-run:not(:disabled):hover {
-				box-shadow: 0 0 26px rgba(255, 107, 44, .75), 0 0 12px rgba(0, 240, 255, .35);
-				transform: translateY(-1px);
-			}
-			.thumb.is-selected::after {
-				content: "";
-				position: absolute;
-				inset: 0;
-				background: linear-gradient(180deg, transparent 0%, rgba(0, 240, 255, .16) 50%, transparent 100%);
-				background-size: 100% 200%;
-				animation: ffScanline 2.6s linear infinite;
-				pointer-events: none;
-			}
-			@keyframes ffScanline {
-				0% { background-position: 0 -100%; }
-				100% { background-position: 0 200%; }
-			}
-			/* FFMPEG Toolkit Styles */
-			#tabToolkit {
 				display: flex;
 				flex-direction: column;
-				gap: 14px;
-				flex: 1;
-				min-height: 0;
-				overflow-y: auto;
+				border-bottom: 1px solid var(--line);
+				background: linear-gradient(180deg, rgba(18, 20, 28, .95) 0%, rgba(11, 12, 16, .85) 100%);
 			}
-			#tabToolkit[hidden] { display: none; }
-			.tk-grid {
-				display: grid;
-				grid-template-columns: 1fr 1fr;
-				gap: 14px;
-			}
-			@media (max-width: 980px) {
-				.tk-grid { grid-template-columns: 1fr; }
-			}
-			.tk-card {
-				background: var(--bg-1);
-				border: 1px solid var(--line);
-				border-radius: var(--radius);
-				padding: 14px;
-				display: flex;
-				flex-direction: column;
-				gap: 12px;
-			}
-			.tk-card-head {
-				display: flex;
-				justify-content: space-between;
-				align-items: flex-start;
-				gap: 10px;
-				border-bottom: 1px solid var(--line-soft);
-				padding-bottom: 10px;
-			}
-			.tk-card-title {
-				font-size: 14px;
-				font-weight: 650;
-				color: var(--text-1);
-				display: flex;
-				align-items: center;
-				gap: 8px;
-			}
-			.tk-card-sub {
-				font-size: 12px;
-				color: var(--text-3);
-				margin-top: 2px;
-			}
-			.tk-drop {
-				height: 115px;
-			}
-			.tk-controls {
-				display: flex;
-				gap: 10px;
-				align-items: flex-end;
-				flex-wrap: wrap;
-			}
-			.tk-controls label {
-				display: flex;
-				flex-direction: column;
-				gap: 4px;
-				font-size: 11.5px;
-				color: var(--text-2);
-			}
-			.tk-controls select, .tk-controls input[type="number"] {
-				padding: 6px 9px;
-				background: var(--bg-0);
-				border: 1px solid var(--line);
-				border-radius: var(--radius-sm);
-				color: var(--text-1);
-				font: inherit;
-				font-size: 12.5px;
-			}
-			.tk-list {
-				display: flex;
-				flex-direction: column;
-				gap: 8px;
-				max-height: 270px;
-				overflow-y: auto;
-			}
-			.tk-empty {
-				padding: 18px 12px;
-				text-align: center;
-				color: var(--text-3);
-				font-size: 12.5px;
-				background: var(--bg-0);
-				border: 1px dashed var(--line-soft);
-				border-radius: var(--radius-sm);
-			}
-			.tk-item {
-				display: flex;
-				justify-content: space-between;
-				align-items: center;
-				gap: 10px;
-				padding: 9px 11px;
+			.gpu-device-badge {
+				font-size: 10.5px;
+				padding: 2px 7px;
+				border-radius: 999px;
 				background: var(--bg-2);
-				border: 1px solid var(--line-soft);
-				border-radius: var(--radius-sm);
-			}
-			.tk-item-info { min-width: 0; flex: 1; }
-			.tk-item-name {
-				font-size: 12px;
-				color: var(--text-1);
+				border: 1px solid var(--line);
+				color: var(--text-3);
+				max-width: 145px;
 				white-space: nowrap;
 				overflow: hidden;
 				text-overflow: ellipsis;
 			}
-			.tk-item-meta {
-				display: flex;
-				align-items: center;
-				gap: 6px;
-				flex-wrap: wrap;
-				font-size: 11px;
-				color: var(--text-3);
-				margin-top: 3px;
-			}
-			.tk-badge {
-				padding: 1px 6px;
-				border-radius: 999px;
-				font-size: 10px;
-				font-weight: 700;
-				font-family: var(--mono);
-			}
-			.tk-badge.is-ok { background: rgba(65, 184, 131, .16); color: var(--ok); }
-			.tk-badge.is-info { background: var(--cyan-dim); color: var(--accent-cyan); }
-			.tk-badge.is-warn { background: rgba(223, 181, 63, .16); color: var(--warn); }
-			.tk-badge.is-err { background: rgba(229, 83, 75, .16); color: var(--err); }
-			.tk-item-actions {
-				display: flex;
-				gap: 6px;
-				flex: none;
-			}
-			.tk-cmd-bar {
-				display: flex;
-				gap: 8px;
-				align-items: center;
-				background: var(--bg-0);
-				border: 1px solid var(--line-soft);
-				border-radius: var(--radius-sm);
-				padding: 6px 9px;
-			}
-			.tk-cmd-bar input {
-				flex: 1;
-				background: transparent;
-				border: none;
+			.gpu-device-badge.is-live {
 				color: var(--accent-cyan);
-				font-family: var(--mono);
-				font-size: 11.5px;
-				outline: none;
+				border-color: rgba(0, 240, 255, .38);
+				background: rgba(0, 240, 255, .1);
+				box-shadow: 0 0 10px rgba(0, 240, 255, .15);
 			}
-			.toast.t-warn { border-left-color: var(--warn); }
+			.mgraph-grid {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 8px;
+				padding: 10px 10px 12px;
+			}
+			.mgraph-card {
+				position: relative;
+				background: var(--bg-2);
+				border: 1px solid var(--line-soft);
+				border-radius: var(--radius);
+				padding: 8px 9px 7px;
+				display: flex;
+				flex-direction: column;
+				gap: 3px;
+				overflow: hidden;
+				box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+				transition: border-color .18s ease;
+			}
+			.mgraph-card:hover {
+				border-color: var(--line);
+			}
+			.mgraph-top {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 4px;
+			}
+			.mgraph-label {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				font-size: 10.5px;
+				font-weight: 700;
+				text-transform: uppercase;
+				letter-spacing: .04em;
+				color: var(--text-2);
+			}
+			.mgraph-ico {
+				width: 12px;
+				height: 12px;
+				opacity: .85;
+			}
+			.mgraph-card[data-tone="cyan"] .mgraph-ico,
+			.mgraph-card[data-tone="cyan"] .mgraph-val { color: var(--accent-cyan); }
+			.mgraph-card[data-tone="orange"] .mgraph-ico,
+			.mgraph-card[data-tone="orange"] .mgraph-val { color: var(--accent); }
+			.mgraph-card[data-tone="emerald"] .mgraph-ico,
+			.mgraph-card[data-tone="emerald"] .mgraph-val { color: var(--ok); }
+			.mgraph-card[data-tone="purple"] .mgraph-ico,
+			.mgraph-card[data-tone="purple"] .mgraph-val { color: #a855f7; }
+			.mgraph-val {
+				font-size: 12px;
+				font-weight: 700;
+				color: var(--text-1);
+			}
+			.mgraph-sub {
+				font-size: 9.5px;
+				color: var(--text-3);
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+			.mgraph-chart {
+				height: 34px;
+				width: 100%;
+				margin-top: 2px;
+				border-radius: 3px;
+				background:
+					linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+					linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+				background-size: 100% 11px, 24px 100%;
+				background-color: rgba(11, 12, 16, .65);
+				overflow: hidden;
+			}
+			.mgraph-svg {
+				width: 100%;
+				height: 100%;
+				display: block;
+			}
+			.mgraph-line {
+				fill: none;
+				stroke-width: 1.7;
+				stroke-linecap: round;
+				stroke-linejoin: round;
+				vector-effect: non-scaling-stroke;
+			}
+			.mgraph-bar {
+				height: 3px;
+				width: 100%;
+				background: var(--bg-0);
+				border-radius: 2px;
+				overflow: hidden;
+				margin-top: 2px;
+			}
+			.mgraph-bar i {
+				display: block;
+				height: 100%;
+				border-radius: 2px;
+				transition: width .6s ease;
+			}
+			#barGpuUtil { background: linear-gradient(90deg, #00b4d8, #00f0ff); }
+			#barGpuVram { background: linear-gradient(90deg, #ff6b2c, #ff3d68); }
+			#barGpuTemp { background: #2ee59d; }
+			#barDiskUsage { background: linear-gradient(90deg, #8b5cf6, #c084fc); }
 		`;
 		document.head.appendChild(style);
+	}
+
+	// Inject Hardware Telemetry Graph Deck into right rail if missing from HTML
+	const rightRail = document.querySelector('.rail-right');
+	if (rightRail && !$('gpuTelemetryDeck')) {
+		const deck = document.createElement('div');
+		deck.className = 'telemetry-deck';
+		deck.id = 'gpuTelemetryDeck';
+		deck.innerHTML = buildTelemetryDeckMarkup();
+		rightRail.insertBefore(deck, rightRail.firstChild);
 	}
 
 	// Inject 3rd tab button if missing
@@ -2758,25 +2876,7 @@ function ensureModernUiAndToolkit() {
 		tabsNav.appendChild(btn);
 	}
 
-	// Inject FFMPEG Toolkit link in topbar if missing
-	const topbarRight = document.querySelector('.topbar-right');
-	if (topbarRight && !$('btnTopToolkit') &&$('tabBatch')) {
-		const linkBtn = document.createElement('a');
-		linkBtn.id = 'btnTopToolkit';
-		linkBtn.href = 'ffmpeg-tools.html';
-		linkBtn.className = 'btn btn-ghost btn-mini';
-		linkBtn.title = 'Open standalone FFMPEG Tools page or switch tab';
-		linkBtn.textContent = 'FFMPEG Tools';
-		linkBtn.onclick = e => {
-			if ($('tabToolkit')) {
-				e.preventDefault();
-				switchTab('toolkit');
-			}
-		};
-		topbarRight.insertBefore(linkBtn, topbarRight.firstChild);
-	}
-
-	// Inject Toolkit Section inside .stage if missing
+	// Inject FFMPEG Toolkit Section inside .stage if missing
 	const stage = document.querySelector('.stage');
 	if (stage && !$('tabToolkit')) {
 		const sec = document.createElement('section');
@@ -2788,25 +2888,114 @@ function ensureModernUiAndToolkit() {
 	}
 }
 
+function buildTelemetryDeckMarkup() {
+	return `
+		<div class="rail-head">
+			<h2>Hardware Telemetry</h2>
+			<span class="gpu-device-badge mono" id="gpuDeviceName" title="Detected Graphic Device">standby</span>
+		</div>
+		<div class="mgraph-grid">
+			<div class="mgraph-card" id="cardGpuUtil" data-tone="cyan">
+				<div class="mgraph-top">
+					<span class="mgraph-label">GPU Load</span>
+					<span class="mgraph-val mono" id="valGpuUtil">—%</span>
+				</div>
+				<div class="mgraph-sub mono" id="subGpuUtil">ADL / DirectML Engine</div>
+				<div class="mgraph-chart">
+					<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+						<defs>
+							<linearGradient id="gradGpuUtil" x1="0" y1="0" x2="0" y2="1">
+								<stop offset="0%" stop-color="#00f0ff" stop-opacity="0.42"/>
+								<stop offset="100%" stop-color="#00f0ff" stop-opacity="0.0"/>
+							</linearGradient>
+						</defs>
+						<path id="areaGpuUtil" class="mgraph-area" fill="url(#gradGpuUtil)" d="M0,34 L120,34 Z"></path>
+						<path id="lineGpuUtil" class="mgraph-line" stroke="#00f0ff" d="M0,33 L120,33"></path>
+					</svg>
+				</div>
+				<div class="mgraph-bar"><i id="barGpuUtil" style="width:0%"></i></div>
+			</div>
+
+			<div class="mgraph-card" id="cardGpuVram" data-tone="orange">
+				<div class="mgraph-top">
+					<span class="mgraph-label">VRAM Usage</span>
+					<span class="mgraph-val mono" id="valGpuVram">— GB</span>
+				</div>
+				<div class="mgraph-sub mono" id="subGpuVram">0 / 0 GB (0%)</div>
+				<div class="mgraph-chart">
+					<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+						<defs>
+							<linearGradient id="gradGpuVram" x1="0" y1="0" x2="0" y2="1">
+								<stop offset="0%" stop-color="#ff6b2c" stop-opacity="0.42"/>
+								<stop offset="100%" stop-color="#ff6b2c" stop-opacity="0.0"/>
+							</linearGradient>
+						</defs>
+						<path id="areaGpuVram" class="mgraph-area" fill="url(#gradGpuVram)" d="M0,34 L120,34 Z"></path>
+						<path id="lineGpuVram" class="mgraph-line" stroke="#ff6b2c" d="M0,33 L120,33"></path>
+					</svg>
+				</div>
+				<div class="mgraph-bar"><i id="barGpuVram" style="width:0%"></i></div>
+			</div>
+
+			<div class="mgraph-card" id="cardGpuTemp" data-tone="emerald">
+				<div class="mgraph-top">
+					<span class="mgraph-label">GPU Temp</span>
+					<span class="mgraph-val mono" id="valGpuTemp">—°C</span>
+				</div>
+				<div class="mgraph-sub mono" id="subGpuTemp">Thermal Sensor</div>
+				<div class="mgraph-chart">
+					<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+						<defs>
+							<linearGradient id="gradGpuTemp" x1="0" y1="0" x2="0" y2="1">
+								<stop offset="0%" stop-color="#2ee59d" stop-opacity="0.42"/>
+								<stop offset="100%" stop-color="#2ee59d" stop-opacity="0.0"/>
+							</linearGradient>
+						</defs>
+						<path id="areaGpuTemp" class="mgraph-area" fill="url(#gradGpuTemp)" d="M0,34 L120,34 Z"></path>
+						<path id="lineGpuTemp" class="mgraph-line" stroke="#2ee59d" d="M0,33 L120,33"></path>
+					</svg>
+				</div>
+				<div class="mgraph-bar"><i id="barGpuTemp" style="width:0%"></i></div>
+			</div>
+
+			<div class="mgraph-card" id="cardDiskUsage" data-tone="purple">
+				<div class="mgraph-top">
+					<span class="mgraph-label">Disk Usage</span>
+					<span class="mgraph-val mono" id="valDiskUsage">—%</span>
+				</div>
+				<div class="mgraph-sub mono" id="subDiskUsage">— GB free / — GB</div>
+				<div class="mgraph-chart">
+					<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+						<defs>
+							<linearGradient id="gradDiskUsage" x1="0" y1="0" x2="0" y2="1">
+								<stop offset="0%" stop-color="#a855f7" stop-opacity="0.42"/>
+								<stop offset="100%" stop-color="#a855f7" stop-opacity="0.0"/>
+							</linearGradient>
+						</defs>
+						<path id="areaDiskUsage" class="mgraph-area" fill="url(#gradDiskUsage)" d="M0,34 L120,34 Z"></path>
+						<path id="lineDiskUsage" class="mgraph-line" stroke="#a855f7" d="M0,33 L120,33"></path>
+					</svg>
+				</div>
+				<div class="mgraph-bar"><i id="barDiskUsage" style="width:0%"></i></div>
+			</div>
+		</div>
+	`;
+}
+
 function buildToolkitMarkup() {
 	return `
 		<div class="tk-grid">
-			<!-- Card 1: Faststart moov Atom Repair -->
 			<div class="tk-card">
 				<div class="tk-card-head">
 					<div>
-						<div class="tk-card-title">
-							<svg viewBox="0 0 24 24" class="icon" style="color:var(--accent)"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-							MP4 Faststart Repair (moov Atom Fix)
-						</div>
-						<div class="tk-card-sub">Fixes <code>ffprobe duration='N/A'</code> & HTTP 415 by moving the <code>moov</code> atom to the front (<code>-movflags +faststart -c copy</code>).</div>
+						<div class="tk-card-title">MP4 Faststart Repair (moov Atom Fix)</div>
+						<div class="tk-card-sub">Fixes <code>ffprobe duration='N/A'</code> & HTTP 415 by moving the <code>moov</code> atom to the front.</div>
 					</div>
 					<div style="display:flex;gap:6px">
 						<button class="btn btn-mini btn-primary" id="btnFaststartDownloadAll" disabled>Download All (_f.mp4)</button>
 						<button class="btn btn-mini btn-ghost" id="btnFaststartClear">Clear</button>
 					</div>
 				</div>
-
 				<div class="tk-controls">
 					<label class="switch">
 						<input type="checkbox" id="chkAutoFaststart" checked>
@@ -2819,31 +3008,22 @@ function buildToolkitMarkup() {
 						<span class="switch-label">Auto-download repaired <code>_f.mp4</code></span>
 					</label>
 				</div>
-
-				<div class="dropzone tk-drop" id="zoneFaststart" tabindex="0" role="button" aria-label="Upload broken MP4 videos for faststart repair">
+				<div class="dropzone tk-drop" id="zoneFaststart" tabindex="0" role="button">
 					<input type="file" id="inputFaststart" accept="video/mp4,video/quicktime,video/x-m4v,audio/mp4,.mp4,.mov,.m4v,.m4a" multiple hidden>
 					<div class="dropzone-empty">
-						<p>Drop broken <b>.mp4 / .mov</b> files here (batch supported)<br><span>or click to browse — outputs <code>filename_f.mp4</code></span></p>
+						<p>Drop broken <b>.mp4 / .mov</b> files here (batch supported)</p>
 					</div>
 				</div>
-
-				<div class="tk-list" id="faststartList">
-					<div class="tk-empty">No videos queued yet. Drop .mp4 / .mov files above to relocate the <code>moov</code> atom to the front.</div>
-				</div>
+				<div class="tk-list" id="faststartList"></div>
 			</div>
 
-			<!-- Card 2: Lossless <500 MB Segment Splitter -->
 			<div class="tk-card">
 				<div class="tk-card-head">
 					<div>
-						<div class="tk-card-title">
-							<svg viewBox="0 0 24 24" class="icon" style="color:var(--accent-cyan)"><path d="M6 6h12M6 12h12M6 18h12M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-							Lossless Video Splitter (&lt;500 MB API Limit)
-						</div>
-						<div class="tk-card-sub">Slices large MP4s on keyframes without re-encoding and places <code>moov</code> at the front of every part.</div>
+						<div class="tk-card-title">Lossless Video Splitter (&lt;500 MB API Limit)</div>
+						<div class="tk-card-sub">Slices large MP4s on keyframes without re-encoding.</div>
 					</div>
 				</div>
-
 				<div class="tk-controls">
 					<label>
 						<span>Split mode</span>
@@ -2858,24 +3038,14 @@ function buildToolkitMarkup() {
 					</label>
 					<button class="btn btn-primary" id="btnSplitRun" disabled>Select a video below</button>
 				</div>
-
-				<div class="dropzone tk-drop" id="zoneSplitter" tabindex="0" role="button" aria-label="Upload large MP4 video to split into segments">
+				<div class="dropzone tk-drop" id="zoneSplitter" tabindex="0" role="button">
 					<input type="file" id="inputSplitter" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
 					<div class="dropzone-empty">
-						<p>Drop a large <b>.mp4</b> video (&gt;500 MB or any size)<br><span>lossless stream copy · instant keyframe slicing</span></p>
+						<p>Drop a large <b>.mp4</b> video (&gt;500 MB or any size)</p>
 					</div>
 				</div>
-
-				<div class="tk-list" id="splitterList">
-					<div class="tk-empty">Drop a large video (&gt;500 MB) above to slice it into API-ready segments with <code>moov</code> at the front.</div>
-				</div>
+				<div class="tk-list" id="splitterList"></div>
 			</div>
-		</div>
-
-		<div class="tk-cmd-bar">
-			<span class="mono" style="font-size:11px;color:var(--text-3)">Terminal Batch CMD:</span>
-			<input type="text" id="ffmpegCmdBox" readonly value='for %I in (*.mp4) do ffmpeg -i "%I" -movflags faststart -c copy "%~nI_f.mp4"'>
-			<button class="btn btn-mini" id="btnCopyCmd">Copy CMD</button>
 		</div>
 	`;
 }
@@ -2924,7 +3094,6 @@ function boot() {
 	ensureModernUiAndToolkit();
 	bindDom();
 
-	// Wire main console if present
 	if (dom.cfgUrl) dom.cfgUrl.value = Config.baseUrl;
 	if (dom.cfgKey) dom.cfgKey.value = Config.apiKey;
 	if (dom.cfgRemember) dom.cfgRemember.checked = !!localStorage.getItem('ff.apiKey');
@@ -2987,7 +3156,6 @@ function boot() {
 
 	if (dom.optionFilter) dom.optionFilter.oninput = () => Options.filter(dom.optionFilter.value);
 
-	// Wire FFMPEG Toolkit controls
 	wireDropzone(dom.zoneFaststart, dom.inputFaststart, files => Toolkit.addFaststartFiles(files));
 	wireDropzone(dom.zoneSplitter, dom.inputSplitter, files => Toolkit.loadSplitterFile(files[0]));
 
@@ -3020,7 +3188,6 @@ function boot() {
 		};
 	}
 
-	// Load capabilities if on main console page
 	if (dom.optionsGroups) {
 		Options.load().catch(() => {
 			dom.optionsGroups.innerHTML = '<div class="options-placeholder">API unreachable — check the server, then reconnect. Options will load automatically afterwards.</div>';
