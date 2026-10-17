@@ -304,8 +304,117 @@
 			</section>
 		</main>
 
-		<!-- Right rail: Jobs Queue -->
-		<aside class="rail rail-right" aria-label="Jobs">
+		<!-- Right rail: Hardware Telemetry Graphs + Jobs Queue -->
+		<aside class="rail rail-right" aria-label="Telemetry and Jobs">
+			<!-- Live GPU & Disk Telemetry Graph Deck -->
+			<div class="telemetry-deck" id="gpuTelemetryDeck">
+				<div class="rail-head">
+					<h2>Hardware Telemetry</h2>
+					<span class="gpu-device-badge mono" id="gpuDeviceName" title="Detected Graphic Device">standby</span>
+				</div>
+				<div class="mgraph-grid">
+					<!-- 1. GPU Load (%) -->
+					<div class="mgraph-card" id="cardGpuUtil" data-tone="cyan">
+						<div class="mgraph-top">
+							<span class="mgraph-label">
+								<svg viewBox="0 0 24 24" class="mgraph-ico"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9" y="9" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+								GPU Load
+							</span>
+							<span class="mgraph-val mono" id="valGpuUtil">—%</span>
+						</div>
+						<div class="mgraph-sub mono" id="subGpuUtil">ADL / DirectML Engine</div>
+						<div class="mgraph-chart">
+							<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+								<defs>
+									<linearGradient id="gradGpuUtil" x1="0" y1="0" x2="0" y2="1">
+										<stop offset="0%" stop-color="#00f0ff" stop-opacity="0.42"/>
+										<stop offset="100%" stop-color="#00f0ff" stop-opacity="0.0"/>
+									</linearGradient>
+								</defs>
+								<path id="areaGpuUtil" class="mgraph-area" fill="url(#gradGpuUtil)" d="M0,34 L120,34 Z"></path>
+								<path id="lineGpuUtil" class="mgraph-line" stroke="#00f0ff" d="M0,33 L120,33"></path>
+							</svg>
+						</div>
+						<div class="mgraph-bar"><i id="barGpuUtil" style="width:0%"></i></div>
+					</div>
+
+					<!-- 2. VRAM Usage (GB / %) -->
+					<div class="mgraph-card" id="cardGpuVram" data-tone="orange">
+						<div class="mgraph-top">
+							<span class="mgraph-label">
+								<svg viewBox="0 0 24 24" class="mgraph-ico"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M4 6h16a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+								VRAM Usage
+							</span>
+							<span class="mgraph-val mono" id="valGpuVram">— GB</span>
+						</div>
+						<div class="mgraph-sub mono" id="subGpuVram">0 / 0 GB (0%)</div>
+						<div class="mgraph-chart">
+							<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+								<defs>
+									<linearGradient id="gradGpuVram" x1="0" y1="0" x2="0" y2="1">
+										<stop offset="0%" stop-color="#ff6b2c" stop-opacity="0.42"/>
+										<stop offset="100%" stop-color="#ff6b2c" stop-opacity="0.0"/>
+									</linearGradient>
+								</defs>
+								<path id="areaGpuVram" class="mgraph-area" fill="url(#gradGpuVram)" d="M0,34 L120,34 Z"></path>
+								<path id="lineGpuVram" class="mgraph-line" stroke="#ff6b2c" d="M0,33 L120,33"></path>
+							</svg>
+						</div>
+						<div class="mgraph-bar"><i id="barGpuVram" style="width:0%"></i></div>
+					</div>
+
+					<!-- 3. GPU Temperature (°C) -->
+					<div class="mgraph-card" id="cardGpuTemp" data-tone="emerald">
+						<div class="mgraph-top">
+							<span class="mgraph-label">
+								<svg viewBox="0 0 24 24" class="mgraph-ico"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+								GPU Temp
+							</span>
+							<span class="mgraph-val mono" id="valGpuTemp">—°C</span>
+						</div>
+						<div class="mgraph-sub mono" id="subGpuTemp">Thermal Sensor</div>
+						<div class="mgraph-chart">
+							<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+								<defs>
+									<linearGradient id="gradGpuTemp" x1="0" y1="0" x2="0" y2="1">
+										<stop offset="0%" stop-color="#2ee59d" stop-opacity="0.42"/>
+										<stop offset="100%" stop-color="#2ee59d" stop-opacity="0.0"/>
+									</linearGradient>
+								</defs>
+								<path id="areaGpuTemp" class="mgraph-area" fill="url(#gradGpuTemp)" d="M0,34 L120,34 Z"></path>
+								<path id="lineGpuTemp" class="mgraph-line" stroke="#2ee59d" d="M0,33 L120,33"></path>
+							</svg>
+						</div>
+						<div class="mgraph-bar"><i id="barGpuTemp" style="width:0%"></i></div>
+					</div>
+
+					<!-- 4. Disk Usage (GB / %) -->
+					<div class="mgraph-card" id="cardDiskUsage" data-tone="purple">
+						<div class="mgraph-top">
+							<span class="mgraph-label">
+								<svg viewBox="0 0 24 24" class="mgraph-ico"><ellipse cx="12" cy="5" rx="9" ry="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+								Disk Usage
+							</span>
+							<span class="mgraph-val mono" id="valDiskUsage">—%</span>
+						</div>
+						<div class="mgraph-sub mono" id="subDiskUsage">— GB free / — GB</div>
+						<div class="mgraph-chart">
+							<svg viewBox="0 0 120 34" preserveAspectRatio="none" class="mgraph-svg">
+								<defs>
+									<linearGradient id="gradDiskUsage" x1="0" y1="0" x2="0" y2="1">
+										<stop offset="0%" stop-color="#a855f7" stop-opacity="0.42"/>
+										<stop offset="100%" stop-color="#a855f7" stop-opacity="0.0"/>
+									</linearGradient>
+								</defs>
+								<path id="areaDiskUsage" class="mgraph-area" fill="url(#gradDiskUsage)" d="M0,34 L120,34 Z"></path>
+								<path id="lineDiskUsage" class="mgraph-line" stroke="#a855f7" d="M0,33 L120,33"></path>
+							</svg>
+						</div>
+						<div class="mgraph-bar"><i id="barDiskUsage" style="width:0%"></i></div>
+					</div>
+				</div>
+			</div>
+
 			<div class="rail-head">
 				<h2>Jobs Queue</h2>
 				<button class="btn btn-mini btn-ghost" id="btnJobsRefresh" aria-label="Refresh jobs" title="Refresh jobs">
