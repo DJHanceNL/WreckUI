@@ -1,0 +1,189 @@
+from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
+from queue import Queue
+from typing import List, Optional, Tuple
+
+import cv2
+import numpy
+
+from facefusion import rtc, state_manager, streamer
+from facefusion.apis.stream_event import create_receive_event, destroy_receive_event
+from facefusion.codecs import aom_decoder, aom_encoder, vpx_decoder, vpx_encoder
+from facefusion.content_analyser import analyse_stream
+from facefusion.types import AomDecoder, AomEncoder, BitRate, Buffer, BufferPack, Resolution, RtcPeer, RtcPeerVideo, Time, Timestamp, VideoCodec, VisionFrame, VpxDecoder, VpxEncoder
+from facefusion.vision import is_vision_frame, obscure_frame, read_static_images
+
+
+def run_video_encode_loop(rtc_peer : RtcPeer, video_queue : Queue[Tuple[Time, Future[BufferPack]]]) -> None:
+	video_codec = rtc_peer.get('video').get('codec')
+	video_time, video_future = video_queue.get()
+	video_pack = BufferPack(buffer = bytes(), resolution = (0, 0))
+
+	if not video_future.exception():
+		video_pack = video_future.result()
+
+	video_buffer = video_pack.get('buffer')
+	video_resolution = video_pack.get('resolution')
+
+	if video_buffer:
+		temp_resolution : Resolution = video_resolution
+		temp_bitrate : BitRate = 8000
+		video_encoder = create_video_encoder(video_codec, temp_resolution, temp_bitrate)
+		frame_index = 0
+
+		while video_buffer:
+			sender_bitrate = rtc_peer.get('sender_bitrate').value
+
+			if video_resolution[0] - temp_resolution[0] or video_resolution[1] - temp_resolution[1]:
+				temp_resolution = video_resolution
+				update_video_encoder_resolution(video_codec, video_encoder, temp_resolution)
+
+			if sender_bitrate > 0 and sender_bitrate - temp_bitrate:
+				temp_bitrate = sender_bitrate
+				update_video_encoder_bitrate(video_codec, video_encoder, temp_bitrate)
+
+			__video_buffer__ = encode_video_frame(video_codec, video_encoder, video_buffer, temp_resolution, frame_index)
+
+			if __video_buffer__:
+				video_timestamp = rtc.convert_time_to_timestamp(video_codec, video_time)
+				rtc.send_video(rtc_peer, __video_buffer__, video_timestamp)
+
+			receiver_bitrate = rtc_peer.get('receiver_bitrate').value
+			rtc.adapt_receiver_bitrate(rtc_peer, receiver_bitrate)
+			frame_index += 1
+
+			video_time, video_future = video_queue.get()
+
+			if not video_future.exception():
+				video_pack = video_future.result()
+
+			video_buffer = video_pack.get('buffer')
+			video_resolution = video_pack.get('resolution')
+
+		destroy_video_encoder(video_codec, video_encoder)
+		rtc.clear_bitrate(rtc_peer)
+
+
+def receive_video_frames(rtc_peer_video : RtcPeerVideo, video_queue : Queue[Tuple[Time, Future[BufferPack]]], video_executor : ThreadPoolExecutor) -> None:
+	video_track = rtc_peer_video.get('receiver_track')
+	video_codec = rtc_peer_video.get('codec')
+	video_decoder = create_video_decoder(video_codec)
+	source_vision_frames = read_static_images(state_manager.get_item('source_paths'))
+
+	video_frame_handler = partial(handle_video_frame, source_vision_frames, video_codec, video_decoder, video_queue, video_executor)
+	receive_event = create_receive_event(video_track, video_frame_handler)
+	receive_event.wait()
+	destroy_receive_event(video_track)
+
+	empty_future : Future[BufferPack] = Future()
+	empty_future.set_result(BufferPack(buffer = bytes(), resolution = (0, 0)))
+	video_queue.put((0.0, empty_future))
+	destroy_video_decoder(video_codec, video_decoder)
+
+
+def process_video_frame(source_vision_frames : List[VisionFrame], input_vision_frame : VisionFrame) -> BufferPack:
+	if analyse_stream(input_vision_frame):
+		output_vision_frame = obscure_frame(input_vision_frame)
+	else:
+		output_vision_frame = streamer.process_stream_frame(source_vision_frames, input_vision_frame)
+
+	output_resolution : Resolution = (output_vision_frame.shape[1], output_vision_frame.shape[0])
+	output_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
+	return BufferPack(buffer = output_buffer, resolution = output_resolution)
+
+
+def decode_video_frame(video_codec : VideoCodec, video_decoder : VpxDecoder | AomDecoder, input_buffer : Buffer) -> Optional[VisionFrame]:
+	if video_codec == 'av1':
+		aom_pointer = aom_decoder.decode(video_decoder, input_buffer)
+
+		if aom_pointer:
+			return normalize_vision_frame(aom_pointer)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		vpx_pointer = vpx_decoder.decode(video_decoder, input_buffer)
+
+		if vpx_pointer:
+			return normalize_vision_frame(vpx_pointer)
+
+	return None
+
+
+def encode_video_frame(video_codec : VideoCodec, video_encoder : VpxEncoder | AomEncoder, input_buffer : Buffer, frame_resolution : Resolution, frame_index : int) -> Buffer:
+	if video_codec == 'av1':
+		return aom_encoder.encode(video_encoder, input_buffer, frame_resolution, frame_index)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		return vpx_encoder.encode(video_encoder, input_buffer, frame_resolution, frame_index)
+
+	return bytes()
+
+
+def normalize_vision_frame(frame_pointer : BufferPack) -> VisionFrame:
+	frame_width, frame_height = frame_pointer.get('resolution')
+	vision_frame = numpy.frombuffer(frame_pointer.get('buffer'), dtype = numpy.uint8).reshape((frame_height * 3 // 2, frame_width))
+	return cv2.cvtColor(vision_frame, cv2.COLOR_YUV2BGR_I420)
+
+
+def create_video_decoder(video_codec : VideoCodec) -> Optional[VpxDecoder | AomDecoder]:
+	if video_codec == 'av1':
+		return aom_decoder.create(8)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		return vpx_decoder.create(video_codec, 8)
+
+	return None
+
+
+def create_video_encoder(video_codec : VideoCodec, frame_resolution : Resolution, bitrate : BitRate) -> Optional[VpxEncoder | AomEncoder]:
+	if video_codec == 'av1':
+		return aom_encoder.create(frame_resolution, bitrate, 8, 10)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		return vpx_encoder.create(video_codec, frame_resolution, bitrate, 8, 10)
+
+	return None
+
+
+def destroy_video_decoder(video_codec : VideoCodec, video_decoder : VpxDecoder | AomDecoder) -> None:
+	if video_codec == 'av1':
+		aom_decoder.destroy(video_decoder)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		vpx_decoder.destroy(video_decoder)
+
+
+def destroy_video_encoder(video_codec : VideoCodec, video_encoder : VpxEncoder | AomEncoder) -> None:
+	if video_codec == 'av1':
+		aom_encoder.destroy(video_encoder)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		vpx_encoder.destroy(video_encoder)
+
+
+def update_video_encoder_resolution(video_codec : VideoCodec, video_encoder : VpxEncoder | AomEncoder, frame_resolution : Resolution) -> bool:
+	if video_codec == 'av1':
+		return aom_encoder.update_resolution(video_encoder, frame_resolution)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		return vpx_encoder.update_resolution(video_encoder, frame_resolution)
+
+	return False
+
+
+def update_video_encoder_bitrate(video_codec : VideoCodec, video_encoder : VpxEncoder | AomEncoder, bitrate : BitRate) -> bool:
+	if video_codec == 'av1':
+		return aom_encoder.update_bitrate(video_encoder, bitrate)
+
+	if video_codec in [ 'vp8', 'vp9' ]:
+		return vpx_encoder.update_bitrate(video_encoder, bitrate)
+
+	return False
+
+
+def handle_video_frame(source_vision_frames : List[VisionFrame], video_codec : VideoCodec, video_decoder : VpxDecoder | AomDecoder, video_queue : Queue[Tuple[Time, Future[BufferPack]]], video_executor : ThreadPoolExecutor, video_buffer : Buffer, video_timestamp : Timestamp) -> None:
+	vision_frame = decode_video_frame(video_codec, video_decoder, video_buffer)
+
+	if is_vision_frame(vision_frame) and video_queue.qsize() < video_queue.maxsize:
+		video_future = video_executor.submit(process_video_frame, source_vision_frames, vision_frame)
+		video_time = rtc.convert_timestamp_to_time(video_codec, video_timestamp)
+		video_queue.put((video_time, video_future))

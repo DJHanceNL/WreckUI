@@ -1,0 +1,35 @@
+import os
+import signal
+import sys
+from time import sleep
+from types import FrameType
+from typing import NoReturn
+
+from facefusion import process_manager, state_manager
+from facefusion.temp_helper import clear_temp_directory
+from facefusion.types import ErrorCode
+
+
+def fatal_exit(error_code : ErrorCode) -> NoReturn:
+	os._exit(error_code)
+
+
+def hard_exit(error_code : ErrorCode) -> NoReturn:
+	sys.exit(error_code)
+
+
+def signal_exit(signum : int, frame : FrameType) -> NoReturn:
+	graceful_exit(0)
+
+
+def graceful_exit(error_code : ErrorCode) -> NoReturn:
+	signal.signal(signal.SIGINT, signal.SIG_IGN)
+	process_manager.stop()
+
+	while process_manager.is_processing():
+		sleep(0.5)
+
+	if state_manager.get_item('output_path'):
+		clear_temp_directory(state_manager.get_temp_path(), state_manager.get_item('output_path'))
+
+	hard_exit(error_code)

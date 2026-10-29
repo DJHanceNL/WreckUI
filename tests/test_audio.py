@@ -1,0 +1,54 @@
+
+import pytest
+from pytest import approx
+
+from facefusion import ffmpeg, ffmpeg_builder, process_manager, state_manager
+from facefusion.audio import detect_audio_duration, get_audio_frame, read_static_audio, restrict_trim_audio_frame
+from facefusion.download import conditional_download
+from .assert_helper import get_test_example_file, get_test_examples_directory
+
+
+@pytest.fixture(scope = 'module', autouse = True)
+def before_all() -> None:
+	state_manager.init()
+
+	process_manager.start()
+	conditional_download(get_test_examples_directory(),
+	[
+		'https://github.com/facefusion/facefusion-assets/releases/download/examples-3.0.0/source.mp3'
+	])
+
+	ffmpeg.run_ffmpeg(
+		ffmpeg_builder.chain(
+			ffmpeg_builder.set_input(get_test_example_file('source.mp3')),
+			ffmpeg_builder.set_output(get_test_example_file('source.wav'))
+		)
+	)
+
+
+def test_get_audio_frame() -> None:
+	assert get_audio_frame(get_test_example_file('source.mp3'), 25).shape == (80, 16)
+	assert get_audio_frame(get_test_example_file('source.wav'), 25).shape == (80, 16)
+	assert get_audio_frame('invalid', 25) is None
+
+
+def test_read_static_audio() -> None:
+	assert len(read_static_audio(get_test_example_file('source.mp3'), 25)) == 280
+	assert len(read_static_audio(get_test_example_file('source.wav'), 25)) == 280
+	assert read_static_audio('invalid', 25) is None
+
+
+def test_detect_audio_duration() -> None:
+	assert detect_audio_duration(get_test_example_file('source.mp3')) == approx(3.788, rel = 1e-3)
+	assert detect_audio_duration(get_test_example_file('source.wav')) == approx(3.788, rel = 1e-3)
+	assert detect_audio_duration('invalid') == 0
+
+
+def test_restrict_trim_audio_frame() -> None:
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, 0, 50) == (0, 50)
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, 20, 95) == (20, 95)
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, -10, None) == (0, 95)
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, None, -10) == (0, 0)
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, 100, None) == (95, 95)
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, None, 100) == (0, 95)
+	assert restrict_trim_audio_frame(get_test_example_file('source.mp3'), 25, None, None) == (0, 95)

@@ -1,0 +1,254 @@
+from typing import Iterator
+
+import pytest
+from pytest_mock import MockerFixture
+from starlette.testclient import TestClient
+
+from facefusion import metadata, session_manager, state_manager
+from facefusion.apis import websocket_store
+from facefusion.apis.core import create_api
+from .assert_helper import get_test_jobs_directory
+
+
+@pytest.fixture(scope = 'module', autouse = True)
+def before_all() -> None:
+	state_manager.init()
+	state_manager.init_item('jobs_path', get_test_jobs_directory())
+	state_manager.init_item('api_session_limit', 10)
+
+
+@pytest.fixture(scope = 'function', autouse = True)
+def before_each() -> None:
+	session_manager.API_SESSIONS.clear()
+
+
+@pytest.fixture(scope = 'module')
+def test_client() -> Iterator[TestClient]:
+	with TestClient(create_api()) as test_client:
+		yield test_client
+
+
+@pytest.fixture(scope = 'function', autouse = True)
+def mock_detect_execution_devices(mocker : MockerFixture) -> None:
+	mocker.patch('facefusion.system.state_manager.get_temp_path', return_value = '/tmp')
+	mocker.patch('facefusion.system.detect_disk_metrics', return_value =
+	[
+		{
+			'total':
+			{
+				'value': 500,
+				'unit': 'GB'
+			},
+			'free':
+			{
+				'value': 200,
+				'unit': 'GB'
+			},
+			'utilization':
+			{
+				'value': 60,
+				'unit': '%'
+			}
+		}
+	])
+	mocker.patch('facefusion.system.detect_memory_metrics', return_value =
+	{
+		'total':
+		{
+			'value': 32,
+			'unit': 'GB'
+		},
+		'free':
+		{
+			'value': 16,
+			'unit': 'GB'
+		},
+		'utilization':
+		{
+			'value': 50,
+			'unit': '%'
+		}
+	})
+	mocker.patch('facefusion.system.detect_network_metrics', return_value =
+	{
+		'sent':
+		{
+			'value': 1024,
+			'unit': 'MB'
+		},
+		'received':
+		{
+			'value': 2048,
+			'unit': 'MB'
+		}
+	})
+	mocker.patch('facefusion.system.detect_processor_metrics', return_value =
+	{
+		'cores':
+		{
+			'value': 16,
+			'unit': 'cores'
+		},
+		'frequency':
+		{
+			'value': 3500,
+			'unit': 'MHz'
+		},
+		'utilization':
+		{
+			'value': 25,
+			'unit': '%'
+		}
+	})
+	mocker.patch('facefusion.system.detect_graphic_devices', return_value =
+	[
+		{
+			'driver_version': '555.42',
+			'framework':
+			{
+				'name': 'CUDA',
+				'version': '12.5'
+			},
+			'product':
+			{
+				'vendor': 'NVIDIA',
+				'name': 'RTX 4090'
+			},
+			'memory':
+			{
+				'total':
+				{
+					'value': 24,
+				  	'unit': 'GB'
+				},
+				'used':
+				{
+					'value': 4,
+					'unit': 'GB'
+				}
+			},
+			'temperature':
+			{
+				'gpu':
+				{
+					'value': 45,
+					'unit': 'C'
+				},
+				'memory':
+				{
+					'value': 0,
+					'unit': 'C'
+				}
+			},
+			'utilization':
+			{
+				'gpu':
+				{
+					'value': 30,
+					'unit': '%'
+				},
+				'memory':
+				{
+					'value': 15,
+					'unit': '%'
+				}
+			}
+		}
+	])
+
+
+def test_get_metrics(test_client : TestClient) -> None:
+	metrics_response = test_client.get('/metrics')
+
+	assert metrics_response.status_code == 401
+
+	create_session_response = test_client.post('/session', json =
+	{
+		'client_version': metadata.get('version')
+	})
+	create_session_body = create_session_response.json()
+
+	metrics_response = test_client.get('/metrics', headers =
+	{
+		'Authorization': 'Bearer ' + create_session_body.get('access_token')
+	})
+	metrics_body = metrics_response.json()
+
+	assert metrics_response.status_code == 200
+
+	assert metrics_body.get('graphic_devices')[0].get('driver_version') == '555.42'
+	assert metrics_body.get('graphic_devices')[0].get('product').get('name') == 'RTX 4090'
+	assert metrics_body.get('graphic_devices')[0].get('memory').get('total').get('value') == 24
+	assert metrics_body.get('graphic_devices')[0].get('memory').get('used').get('value') == 4
+
+	assert metrics_body.get('disks')[0].get('total').get('value') == 500
+	assert metrics_body.get('disks')[0].get('free').get('unit') == 'GB'
+	assert metrics_body.get('disks')[0].get('utilization').get('value') == 60
+
+	assert metrics_body.get('memory').get('total').get('value') == 32
+	assert metrics_body.get('memory').get('free').get('unit') == 'GB'
+	assert metrics_body.get('memory').get('utilization').get('value') == 50
+
+	assert metrics_body.get('network').get('sent').get('value') == 1024
+	assert metrics_body.get('network').get('sent').get('unit') == 'MB'
+	assert metrics_body.get('network').get('received').get('value') == 2048
+
+	assert metrics_body.get('processor').get('cores').get('value') == 16
+	assert metrics_body.get('processor').get('frequency').get('value') == 3500
+	assert metrics_body.get('processor').get('utilization').get('value') == 25
+
+
+def test_get_metrics_not_found(test_client : TestClient, mocker : MockerFixture) -> None:
+	mocker.patch('facefusion.apis.endpoints.metrics.get_metrics_set', return_value = None)
+
+	create_session_response = test_client.post('/session', json =
+	{
+		'client_version': metadata.get('version')
+	})
+	create_session_body = create_session_response.json()
+
+	metrics_response = test_client.get('/metrics', headers =
+	{
+		'Authorization': 'Bearer ' + create_session_body.get('access_token')
+	})
+
+	assert metrics_response.status_code == 404
+
+
+def test_websocket_metrics(test_client : TestClient) -> None:
+	create_session_response = test_client.post('/session', json =
+	{
+		'client_version': metadata.get('version')
+	})
+	create_session_body = create_session_response.json()
+
+	with test_client.websocket_connect('/metrics', subprotocols =
+	[
+		'access_token.' + create_session_body.get('access_token')
+	]) as websocket:
+		metrics_set = websocket.receive_json()
+
+		assert metrics_set.get('graphic_devices')[0].get('driver_version') == '555.42'
+		assert metrics_set.get('graphic_devices')[0].get('product').get('name') == 'RTX 4090'
+		assert metrics_set.get('graphic_devices')[0].get('memory').get('total').get('value') == 24
+		assert metrics_set.get('graphic_devices')[0].get('memory').get('used').get('value') == 4
+
+		assert metrics_set.get('disks')[0].get('total').get('value') == 500
+		assert metrics_set.get('disks')[0].get('free').get('unit') == 'GB'
+		assert metrics_set.get('disks')[0].get('utilization').get('value') == 60
+
+		assert metrics_set.get('memory').get('total').get('value') == 32
+		assert metrics_set.get('memory').get('free').get('unit') == 'GB'
+		assert metrics_set.get('memory').get('utilization').get('value') == 50
+
+		assert metrics_set.get('network').get('sent').get('value') == 1024
+		assert metrics_set.get('network').get('sent').get('unit') == 'MB'
+		assert metrics_set.get('network').get('received').get('value') == 2048
+
+		assert metrics_set.get('processor').get('cores').get('value') == 16
+		assert metrics_set.get('processor').get('frequency').get('value') == 3500
+		assert metrics_set.get('processor').get('utilization').get('value') == 25
+
+		websocket_store.destroy(session_manager.find_api_session_id(create_session_body.get('access_token')))
+
+		assert websocket.receive() == { 'type': 'websocket.close', 'code': 1000, 'reason': '' }

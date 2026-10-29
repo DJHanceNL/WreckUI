@@ -1,0 +1,79 @@
+from types import ModuleType
+from typing import List
+
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.routing import Route, WebSocketRoute
+
+from facefusion import content_analyser
+from facefusion.apis.endpoints.assets import delete_asset, delete_assets, get_asset, get_assets, upload_assets
+from facefusion.apis.endpoints.capabilities import get_capabilities
+from facefusion.apis.endpoints.jobs import create_job, create_step, delete_job, delete_jobs, delete_step, get_job, get_jobs, update_job, update_jobs
+from facefusion.apis.endpoints.metrics import get_metrics, websocket_metrics
+from facefusion.apis.endpoints.ping import websocket_ping
+from facefusion.apis.endpoints.root import get_root
+from facefusion.apis.endpoints.session import create_session, destroy_session, get_session, refresh_session
+from facefusion.apis.endpoints.state import get_state, set_state
+from facefusion.apis.endpoints.stream import delete_stream, post_stream, websocket_stream
+from facefusion.apis.middlewares.exception import create_exception_guard
+from facefusion.apis.middlewares.security import create_security_guard
+from facefusion.apis.middlewares.session import create_session_guard
+from facefusion.libraries import aom as aom_module, datachannel as datachannel_module, opus as opus_module, vpx as vpx_module
+
+
+def get_common_modules() -> List[ModuleType]:
+	return [ aom_module, content_analyser, datachannel_module, opus_module, vpx_module ]
+
+
+def pre_check() -> bool:
+	for common_module in get_common_modules():
+		if not common_module.pre_check():
+			return False
+
+	return True
+
+
+def create_api() -> Starlette:
+	session_guard = Middleware(create_session_guard)
+	routes =\
+	[
+		Route('/', get_root, methods = [ 'GET' ]),
+		Route('/session', create_session, methods = [ 'POST' ]),
+		Route('/session', get_session, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/session', refresh_session, methods = [ 'PUT' ]),
+		Route('/session', destroy_session, methods = [ 'DELETE' ], middleware = [ session_guard ]),
+		Route('/state', get_state, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/state', set_state, methods = [ 'PUT' ], middleware = [ session_guard ]),
+		Route('/assets', get_assets, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/assets', upload_assets, methods = [ 'POST' ], middleware = [ session_guard ]),
+		Route('/assets', delete_assets, methods = [ 'DELETE' ], middleware = [ session_guard ]),
+		Route('/assets/{asset_id}', get_asset, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/assets/{asset_id}', delete_asset, methods = [ 'DELETE' ], middleware = [ session_guard ]),
+		Route('/capabilities', get_capabilities, methods = [ 'GET' ]),
+		Route('/metrics', get_metrics, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/stream', post_stream, methods = [ 'POST' ], middleware = [ session_guard ]),
+		Route('/stream', delete_stream, methods = [ 'DELETE' ], name = 'delete_stream', middleware = [ session_guard ]),
+		Route('/jobs', get_jobs, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/jobs', create_job, methods = [ 'POST' ], middleware = [ session_guard ]),
+		Route('/jobs', update_jobs, methods = [ 'PATCH' ], middleware = [ session_guard ]),
+		Route('/jobs', delete_jobs, methods = [ 'DELETE' ], middleware = [ session_guard ]),
+		Route('/jobs/{job_id}', get_job, methods = [ 'GET' ], middleware = [ session_guard ]),
+		Route('/jobs/{job_id}', create_step, methods = [ 'POST' ], middleware = [ session_guard ]),
+		Route('/jobs/{job_id}', update_job, methods = [ 'PATCH' ], middleware = [ session_guard ]),
+		Route('/jobs/{job_id}', delete_job, methods = [ 'DELETE' ], middleware = [ session_guard ]),
+		Route('/jobs/{job_id}/{step_index:int}', create_step, methods = [ 'POST' ], middleware = [ session_guard ]),
+		Route('/jobs/{job_id}/{step_index:int}', delete_step, methods = [ 'DELETE' ], middleware = [ session_guard ]),
+		WebSocketRoute('/metrics', websocket_metrics, middleware = [ session_guard ]),
+		WebSocketRoute('/ping', websocket_ping, middleware = [ session_guard ]),
+		WebSocketRoute('/stream', websocket_stream, middleware = [ session_guard ])
+	]
+
+	api = Starlette(routes = routes)
+	api.add_middleware(create_exception_guard)
+	api.add_middleware(create_security_guard)
+	api.add_middleware(RequestBodyLimitMiddleware, max_body_size = 512 * 1024 * 1024)
+	api.add_middleware(CORSMiddleware, allow_origins = [ '*' ], allow_methods = [ '*' ], allow_headers = [ '*' ])
+
+	return api
