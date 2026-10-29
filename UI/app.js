@@ -20,7 +20,7 @@
 /* ── Config & Persistence ────────────────────────────────────────────────── */
 const Config = {
 	get baseUrl() {
-		return (localStorage.getItem('ff.baseUrl') || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+		return (localStorage.getItem('ff.baseUrl') || 'http://localhost:8000').replace(/\/+$/, '');
 	},
 	set baseUrl(v) {
 		localStorage.setItem('ff.baseUrl', v.replace(/\/+$/, ''));
@@ -3901,7 +3901,7 @@ function wireDropzone(zone, input, onFiles) {
 }
 
 async function connect() {
-	if (dom.cfgUrl) Config.baseUrl = dom.cfgUrl.value.trim() || 'http://127.0.0.1:8000';
+	if (dom.cfgUrl) Config.baseUrl = dom.cfgUrl.value.trim() || 'http://localhost:8000';
 	if (dom.cfgKey && dom.cfgRemember) Config.setApiKey(dom.cfgKey.value.trim(), dom.cfgRemember.checked);
 	if (dom.settingsModal) dom.settingsModal.hidden = true;
 	try {
