@@ -1,0 +1,163 @@
+import asyncio
+import ctypes
+import threading
+from collections.abc import AsyncIterator
+from concurrent.futures import Future
+from contextvars import copy_context
+from queue import Queue
+from typing import Optional, Tuple
+
+from starlette.websockets import WebSocket
+
+from facefusion import content_store, rtc, rtc_manager, state_manager, streamer, thread_helper
+from facefusion.apis.media_validator import validate_media_resolution
+from facefusion.apis.stream_audio import receive_audio_frames, send_audio_frames
+from facefusion.apis.stream_video import receive_video_frames, send_video_frames
+from facefusion.content_analyser import analyse_frame
+from facefusion.libraries import datachannel as datachannel_module
+from facefusion.types import AudioCodec, AudioFrame, BufferPack, PeerConnection, RtcPeer, RtcPeerAudio, SdpAnswer, SdpOffer, Time, VideoCodec, VisionFrame
+from facefusion.vision import from_buffer, is_vision_frame, obscure_frame, read_static_images, to_buffer
+
+
+async def process_image(websocket : WebSocket) -> None:
+	async for capture_vision_frame in receive_vision_frames(websocket):
+		source_vision_frames = read_static_images(state_manager.get_item('source_paths'))
+		output_vision_frame = streamer.process_stream_frame(source_vision_frames, capture_vision_frame)
+
+		if analyse_frame(capture_vision_frame):
+			output_vision_frame = obscure_frame(capture_vision_frame)
+
+		output_vision_buffer = to_buffer(output_vision_frame)
+		await websocket.send_bytes(output_vision_buffer)
+
+
+async def receive_vision_frames(websocket : WebSocket) -> AsyncIterator[VisionFrame]:
+	websocket_event = await websocket.receive()
+
+	while websocket_event.get('type') == 'websocket.receive':
+		vision_buffer = websocket_event.get('bytes')
+
+		if await asyncio.to_thread(validate_media_resolution, vision_buffer):
+			vision_frame = from_buffer(vision_buffer)
+
+			if is_vision_frame(vision_frame):
+				yield vision_frame
+
+		websocket_event = await websocket.receive()
+
+
+def process_video(sdp_offer : SdpOffer) -> Optional[SdpAnswer]:
+	video_codec : VideoCodec = 'vp8'
+
+	if rtc.get_payload_type(sdp_offer, 'vp9'):
+		video_codec = 'vp9'
+
+	if rtc.get_payload_type(sdp_offer, 'av1'):
+		video_codec = 'av1'
+
+	video_payload_type = rtc.get_payload_type(sdp_offer, video_codec)
+
+	if video_payload_type:
+		peer_connection : PeerConnection = rtc.create_peer_connection()
+		video_receiver_track = rtc.add_video_track(peer_connection, 'recvonly', video_codec, video_payload_type)
+		video_sender_track = rtc.add_video_track(peer_connection, 'sendonly', video_codec, video_payload_type)
+
+		sender_bitrate = ctypes.c_uint(0)
+		receiver_bitrate = ctypes.c_uint(8000)
+		rtc.wire_sender_bitrate(video_sender_track, sender_bitrate)
+
+		audio_codec : AudioCodec = 'opus'
+		audio_payload_type = rtc.get_payload_type(sdp_offer, audio_codec)
+
+		if audio_payload_type:
+			audio_receiver_track = rtc.add_audio_track(peer_connection, 'recvonly', audio_codec, audio_payload_type)
+			audio_sender_track = rtc.add_audio_track(peer_connection, 'sendonly', audio_codec, audio_payload_type)
+
+		rtc.set_remote_description(peer_connection, sdp_offer)
+		sdp_answer = rtc.create_sdp_answer(peer_connection)
+
+		if sdp_answer:
+			rtc_peer : RtcPeer =\
+			{
+				'peer_connection': peer_connection,
+				'video':
+				{
+					'sender_track': video_sender_track,
+					'receiver_track': video_receiver_track,
+					'codec': video_codec
+				},
+				'sender_bitrate': sender_bitrate,
+				'receiver_bitrate': receiver_bitrate
+			}
+
+			if audio_payload_type:
+				rtc_peer['audio'] = RtcPeerAudio(
+					sender_track = audio_sender_track,
+					receiver_track = audio_receiver_track,
+					codec = audio_codec
+				)
+
+			content_store.clear()
+			rtc_manager.set_peer(rtc_peer)
+
+			threading.Thread(
+				target = copy_context().run,
+				args = (run_peer_loop, rtc_peer),
+				daemon = True
+			).start()
+
+			return sdp_answer
+
+		datachannel_module.create_static_library().rtcDeletePeerConnection(peer_connection)
+
+	return None
+
+
+def run_peer_loop(rtc_peer : RtcPeer) -> None:
+	execution_thread_count = state_manager.get_item('execution_thread_count')
+	video_queue : Queue[Tuple[Time, Future[BufferPack]]] = Queue(maxsize = execution_thread_count)
+	audio_queue : Queue[Tuple[Time, AudioFrame]] = Queue(maxsize = execution_thread_count * 10)
+	video_executor = thread_helper.create_executor(execution_thread_count)
+
+	video_receiver_thread = threading.Thread(
+		target = copy_context().run,
+		args = (receive_video_frames, rtc_peer.get('video'), video_queue, video_executor),
+		daemon = True
+	)
+	video_encoder_thread = threading.Thread(
+		target = copy_context().run,
+		args = (send_video_frames, rtc_peer, video_queue),
+		daemon = True
+	)
+	video_receiver_thread.start()
+	video_encoder_thread.start()
+
+	if rtc_peer.get('audio'):
+		audio_receiver_thread = threading.Thread(
+			target = copy_context().run,
+			args = (receive_audio_frames, rtc_peer.get('audio'), audio_queue),
+			daemon = True
+		)
+		audio_encoder_thread = threading.Thread(
+			target = copy_context().run,
+			args = (send_audio_frames, rtc_peer, audio_queue),
+			daemon = True
+		)
+		audio_receiver_thread.start()
+		audio_encoder_thread.start()
+		audio_receiver_thread.join()
+		audio_encoder_thread.join()
+
+	video_receiver_thread.join()
+	video_encoder_thread.join()
+	video_executor.shutdown(wait = True)
+
+	rtc_manager.delete_peer()
+
+
+def destroy_stream() -> bool:
+	if rtc_manager.has_peer():
+		rtc_manager.delete_peer()
+		return not rtc_manager.has_peer()
+
+	return False

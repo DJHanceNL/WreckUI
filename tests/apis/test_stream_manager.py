@@ -1,0 +1,199 @@
+import ctypes
+import threading
+from contextvars import copy_context
+from typing import Iterator
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from facefusion import rtc, rtc_manager, state_manager, store_creator
+from facefusion.apis.stream_manager import destroy_stream, process_image, process_video, receive_vision_frames, run_peer_loop
+from facefusion.common_helper import is_linux, is_windows
+from facefusion.download import conditional_download
+from facefusion.hash_helper import create_hash
+from facefusion.libraries import datachannel as datachannel_module
+from facefusion.session_context import resolve_local_id, set_session_id
+from facefusion.types import RtcPeer, SessionId, VideoCodec
+from tests.assert_helper import get_test_example_file, get_test_examples_directory
+
+
+@pytest.fixture(scope = 'module', autouse = True)
+def before_all() -> None:
+	state_manager.init()
+	state_manager.init_item('download_providers', [ 'github', 'huggingface' ])
+	state_manager.init_item('execution_thread_count', 8)
+	state_manager.init_item('processors', [])
+
+	datachannel_module.pre_check()
+
+	conditional_download(get_test_examples_directory(),
+	[
+		'https://github.com/facefusion/facefusion-assets/releases/download/examples-3.0.0/source.jpg'
+	])
+
+
+@pytest.fixture(scope = 'function', autouse = True)
+def before_each() -> Iterator[None]:
+	local_id = resolve_local_id()
+
+	rtc_manager.delete_peer()
+
+	yield
+
+	set_session_id(local_id)
+
+
+@pytest.mark.asyncio
+async def test_process_image() -> None:
+	image_buffer = open(get_test_example_file('source.jpg'), 'rb').read()
+	websocket_mock = AsyncMock()
+	websocket_mock.receive.side_effect =\
+	[
+		{
+			'type': 'websocket.receive',
+			'bytes': image_buffer
+		},
+		{
+			'type': 'websocket.disconnect'
+		}
+	]
+
+	with patch('facefusion.apis.stream_manager.analyse_frame', return_value = False):
+		await process_image(websocket_mock)
+
+	websocket_mock.send_bytes.assert_called_once()
+
+	if is_linux() or is_windows():
+		assert create_hash(websocket_mock.send_bytes.call_args[0][0]) == '0142782f'
+
+
+@pytest.mark.asyncio
+async def test_receive_vision_frames() -> None:
+	image_buffer = open(get_test_example_file('source.jpg'), 'rb').read()
+	websocket_mock = AsyncMock()
+	websocket_mock.receive.side_effect =\
+	[
+		{
+			'type': 'websocket.receive',
+			'bytes': image_buffer
+		},
+		{
+			'type': 'websocket.receive',
+			'bytes': 'invalid'.encode()
+		},
+		{
+			'type': 'websocket.receive',
+			'bytes': bytes()
+		},
+		{
+			'type': 'websocket.receive',
+			'bytes': image_buffer
+		},
+		{
+			'type': 'websocket.disconnect'
+		}
+	]
+	vision_frames = []
+
+	async for vision_frame in receive_vision_frames(websocket_mock):
+		vision_frames.append(vision_frame)
+
+	assert len(vision_frames) == 2
+	assert create_hash(vision_frames[0].tobytes()) == '5ed32ca0'
+
+
+@pytest.mark.parametrize('video_codec, session_id', [ ('av1', 'test-process-video-av1'), ('vp8', 'test-process-video-vp8') ])
+def test_process_video(video_codec : VideoCodec, session_id : str) -> None:
+	peer_connection = rtc.create_peer_connection()
+
+	if video_codec == 'av1':
+		rtc.add_video_track(peer_connection, 'sendrecv', video_codec, 35)
+
+	if video_codec == 'vp8':
+		rtc.add_video_track(peer_connection, 'sendrecv', video_codec, 96)
+
+	rtc.add_audio_track(peer_connection, 'sendrecv', 'opus', 111)
+	sdp_offer = rtc.create_sdp_offer(peer_connection)
+	datachannel_module.create_static_library().rtcDeletePeerConnection(peer_connection)
+
+	with patch('facefusion.apis.stream_manager.threading.Thread'):
+		set_session_id(session_id)
+		sdp_answer = process_video(sdp_offer)
+
+	assert 'm=video' in sdp_answer
+	assert 'a=recvonly' in sdp_answer
+	assert 'a=sendonly' in sdp_answer
+
+	rtc_peer = rtc_manager.get_peer()
+	sender_bitrate = rtc_peer.get('sender_bitrate')
+	receiver_bitrate = rtc_peer.get('receiver_bitrate')
+
+	assert sender_bitrate.value == 0
+	assert receiver_bitrate.value == 8000
+
+	rtc.handle_sender_bitrate(0, 8000000, ctypes.addressof(sender_bitrate))
+	assert sender_bitrate.value == 8000
+
+	rtc.adapt_receiver_bitrate(rtc_peer, 4000)
+	assert receiver_bitrate.value == 4000
+
+
+@pytest.mark.parametrize('video_codec, payload_type, session_id', [ ('av1', 35, 'test-run-peer-loop-av1'), ('vp8', 96, 'test-run-peer-loop-vp8') ])
+def test_run_peer_loop(video_codec : VideoCodec, payload_type : int, session_id : SessionId) -> None:
+	peer_connection = rtc.create_peer_connection()
+	video_sender_track = rtc.add_video_track(peer_connection, 'sendonly', video_codec, payload_type)
+	video_receiver_track = rtc.add_video_track(peer_connection, 'recvonly', video_codec, payload_type)
+	rtc_peer : RtcPeer =\
+	{
+		'peer_connection': peer_connection,
+		'video':
+		{
+			'sender_track': video_sender_track,
+			'receiver_track': video_receiver_track,
+			'codec': video_codec
+		},
+		'sender_bitrate': ctypes.c_uint(0),
+		'receiver_bitrate': ctypes.c_uint(0)
+	}
+
+	store_creator.set_content(state_manager.STATE_SET, session_id, state_manager.get_state())
+	set_session_id(session_id)
+	rtc_manager.set_peer(rtc_peer)
+
+	assert rtc_manager.has_peer() is True
+
+	with patch('facefusion.thread_helper.ThreadPoolExecutor') as thread_pool_executor_mock:
+		with patch('facefusion.apis.stream_manager.receive_video_frames'):
+			with patch('facefusion.apis.stream_manager.send_video_frames'):
+				thread = threading.Thread(target = copy_context().run, args = (run_peer_loop, rtc_peer), daemon = True)
+				thread.start()
+				thread.join(timeout = 5.0)
+
+	thread_pool_executor_mock.assert_called_once_with(max_workers = 8, initializer = set_session_id, initargs = tuple([ session_id ]))
+
+	assert rtc_manager.has_peer() is False
+
+
+def test_destroy_stream() -> None:
+	peer_connection = rtc.create_peer_connection()
+	rtc.add_video_track(peer_connection, 'sendonly', 'vp8', 96)
+	rtc_peer : RtcPeer =\
+	{
+		'peer_connection': peer_connection,
+		'video':
+		{
+			'sender_track': 0,
+			'receiver_track': 0,
+			'codec': 'vp8'
+		},
+		'sender_bitrate': ctypes.c_uint(0),
+		'receiver_bitrate': ctypes.c_uint(0)
+	}
+
+	set_session_id('test-destroy-stream')
+	rtc_manager.set_peer(rtc_peer)
+
+	assert destroy_stream() is True
+	assert rtc_manager.get_peer() is None
+
+	assert destroy_stream() is False

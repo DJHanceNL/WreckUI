@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>FFMPEG tools</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body class="standalone-toolkit">
+	<header class="topbar">
+		<div class="brand">
+			<svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+				<rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+				<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+			</svg>
+			<div class="brand-text">
+				<span class="brand-name">FFMPEG tools</span>
+				<span class="brand-sub">FaceFusion v4 · WreckUI Media Repair &amp; Splitter</span>
+			</div>
+		</div>
+
+		<div class="topbar-right">
+			<a class="btn btn-primary btn-mini" href="index.html">
+				<svg viewBox="0 0 24 24" class="icon"><path d="M19 12H5m0 0 5-5m-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+				Back to FaceFusion Studio
+			</a>
+		</div>
+	</header>
+
+	<main class="tk-standalone-stage">
+		<div class="tk-banner">
+			<div>
+				<h1 class="tk-heading">FFMPEG Toolkit:</h1>
+				<p class="tk-sub">Repair MP4/MOV videos with misplaced <code>moov</code> atoms (fixes <code>ffprobe duration='N/A'</code> &amp; HTTP 415) or split large &gt;500 MB videos into lossless API-ready segments.</p>
+			</div>
+		</div>
+
+		<div class="tk-grid">
+			<!-- Tool 1: Upload Broken Videos & Download Repaired Files -->
+			<section class="tk-card" aria-labelledby="faststartTitle">
+				<div class="tk-card-head">
+					<div>
+						<h2 class="tk-card-title" id="faststartTitle">
+							<svg viewBox="0 0 24 24" class="icon" style="color:var(--accent)"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+							MP4 Faststart Repair (moov Atom Fix)
+						</h2>
+						<div class="tk-card-sub">Equivalent to <code>ffmpeg -i input.mp4 -movflags faststart -c copy output_f.mp4</code> — moves <code>moov</code> to the front in-browser.</div>
+					</div>
+					<div class="tk-head-actions">
+						<button class="btn btn-mini btn-primary" id="btnFaststartDownloadAll" disabled>Download All (_f.mp4)</button>
+						<button class="btn btn-mini btn-ghost" id="btnFaststartClear">Clear</button>
+					</div>
+				</div>
+
+				<div class="tk-controls">
+					<label class="switch">
+						<input type="checkbox" id="chkAutoFaststart" checked>
+						<span class="track"></span>
+						<span class="switch-label">Auto-fix on main Studio uploads</span>
+					</label>
+					<label class="switch">
+						<input type="checkbox" id="chkAutoSaveFixed">
+						<span class="track"></span>
+						<span class="switch-label">Auto-download repaired <code>_f.mp4</code> on upload</span>
+					</label>
+				</div>
+
+				<div class="tk-field-label">Upload Broken Videos</div>
+				<div class="dropzone tk-drop" id="zoneFaststart" tabindex="0" role="button" aria-label="Upload broken MP4 videos">
+					<input type="file" id="inputFaststart" accept="video/mp4,video/quicktime,video/x-m4v,audio/mp4,.mp4,.mov,.m4v,.m4a" multiple hidden>
+					<div class="dropzone-empty">
+						<svg viewBox="0 0 24 24" class="icon icon-lg"><path d="M12 16V4m0 0 4 4m-4-4L8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+						<p>Drop broken <b>.mp4 / .mov</b> files here (batch supported)<br><span>or click to select files from your folder</span></p>
+					</div>
+				</div>
+
+				<div class="tk-field-label">Download Repaired Files (<code>*_f.mp4</code>)</div>
+				<div class="tk-list" id="faststartList">
+					<div class="tk-empty">No videos queued yet. Drop .mp4 / .mov files above to relocate the <code>moov</code> atom to the front.</div>
+				</div>
+			</section>
+
+			<!-- Tool 2: Lossless <500 MB Segment Splitter -->
+			<section class="tk-card" aria-labelledby="splitterTitle">
+				<div class="tk-card-head">
+					<div>
+						<h2 class="tk-card-title" id="splitterTitle">
+							<svg viewBox="0 0 24 24" class="icon" style="color:var(--accent-cyan)"><path d="M6 6h12M6 12h12M6 18h12M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+							Lossless Video Splitter (&lt;500 MB API Limit)
+						</h2>
+						<div class="tk-card-sub">Cuts oversized videos on keyframes without re-encoding and writes a faststart <code>moov</code> header on every part.</div>
+					</div>
+				</div>
+
+				<div class="tk-controls">
+					<label>
+						<span>Split mode</span>
+						<select id="splitMode">
+							<option value="size">Fit &lt;500 MB API limit (Max MB per part)</option>
+							<option value="duration">Fixed duration (Seconds per part)</option>
+						</select>
+					</label>
+					<label>
+						<span id="splitValueLabel">Max part size (MB)</span>
+						<input type="number" id="splitValue" value="450" min="5" max="2000" step="10" style="width:110px">
+					</label>
+					<button class="btn btn-primary" id="btnSplitRun" disabled>Select a video below</button>
+				</div>
+
+				<div class="tk-field-label">Upload Oversized Video (&gt;500 MB)</div>
+				<div class="dropzone tk-drop" id="zoneSplitter" tabindex="0" role="button" aria-label="Upload large MP4 video to split">
+					<input type="file" id="inputSplitter" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
+					<div class="dropzone-empty">
+						<svg viewBox="0 0 24 24" class="icon icon-lg"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 4v16" stroke="currentColor" stroke-width="1.7" stroke-dasharray="3 3"/></svg>
+						<p>Drop a large <b>.mp4</b> video here to split<br><span>lossless stream copy · automatic keyframe alignment</span></p>
+					</div>
+				</div>
+
+				<div class="tk-field-label">Download Split Segments (<code>*_part01_f.mp4</code>)</div>
+				<div class="tk-list" id="splitterList">
+					<div class="tk-empty">Drop a large video (&gt;500 MB) above to slice it into API-ready segments with <code>moov</code> at the front.</div>
+				</div>
+			</section>
+		</div>
+
+		<div class="tk-cmd-bar">
+			<span class="mono tk-cmd-label">Windows Batch CMD:</span>
+			<input type="text" id="ffmpegCmdBox" readonly value='for %I in (*.mp4) do ffmpeg -i "%I" -movflags faststart -c copy "%~nI_f.mp4"' aria-label="FFMPEG batch command">
+			<button class="btn btn-mini" id="btnCopyCmd">Copy CMD</button>
+		</div>
+	</main>
+
+	<div class="toasts" id="toasts" aria-live="polite"></div>
+	<script src="app.js" defer></script>
+</body>
+</html>

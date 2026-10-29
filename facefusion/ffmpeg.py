@@ -1,0 +1,456 @@
+import os
+import subprocess
+import tempfile
+from functools import lru_cache
+from types import SimpleNamespace
+from typing import BinaryIO, List, Optional, cast
+
+import facefusion.choices
+from facefusion import cli_progress, ffmpeg_builder, ffprobe, logger, process_manager, state_manager, translator, vision
+from facefusion.filesystem import get_file_format, remove_file
+from facefusion.temp_helper import get_temp_file_path, get_temp_frames_pattern
+from facefusion.types import ApiSecurityStrategy, AudioEncoder, Buffer, Command, EncoderSet, Fps, ImageEncoder, Resolution, SampleRate, VideoEncoder, VideoFormat, VideoReaderMetadata
+
+
+def run_ffmpeg(commands : List[Command]) -> subprocess.Popen[Buffer]:
+	commands = ffmpeg_builder.run(commands)
+	return subprocess.Popen(commands, stderr = subprocess.PIPE, stdout = subprocess.PIPE)
+
+
+def pipe_ffmpeg(commands : List[Command], file : BinaryIO) -> subprocess.Popen[Buffer]:
+	commands = ffmpeg_builder.run(commands)
+	return subprocess.Popen(commands, stdin = file, stderr = subprocess.PIPE, stdout = subprocess.PIPE)
+
+
+def open_ffmpeg(commands : List[Command]) -> subprocess.Popen[Buffer]:
+	commands = ffmpeg_builder.run(commands)
+	return subprocess.Popen(commands, stdin = subprocess.PIPE, stderr = subprocess.DEVNULL, stdout = subprocess.PIPE)
+
+
+def render_progress(process : subprocess.Popen[Buffer], progress : SimpleNamespace) -> None:
+	while __line__ := process.stdout.readline().decode().lower():
+		if process_manager.is_stopping():
+			process.terminate()
+
+		if 'frame=' in __line__:
+			_, __frame_index__ = __line__.split('frame=')
+			frame_index = int(__frame_index__)
+
+			progress.seek(frame_index)
+
+
+def await_process(process : subprocess.Popen[Buffer]) -> subprocess.Popen[Buffer]:
+	log_level = state_manager.get_item('log_level')
+
+	while process_manager.is_processing():
+		try:
+			if log_level == 'debug':
+				log_debug(process)
+			process.wait(timeout = 0.5)
+			return process
+		except subprocess.TimeoutExpired:
+			pass
+
+	if process_manager.is_stopping():
+		process.terminate()
+
+	return process
+
+
+def create_video_reader(video_path : str, frame_index : int, video_metadata : VideoReaderMetadata) -> subprocess.Popen[Buffer]:
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.seek_to(frame_index / video_metadata.get('fps')),
+		ffmpeg_builder.set_input(video_path),
+		ffmpeg_builder.restrict_color_transfer(video_metadata.get('color_transfer')),
+		ffmpeg_builder.prevent_frame_drop(),
+		ffmpeg_builder.enforce_pixel_format('bgr24'),
+		ffmpeg_builder.set_output_format('rawvideo'),
+		ffmpeg_builder.cast_stream()
+	)
+
+	return open_ffmpeg(commands)
+
+
+def create_video_writer(target_path : str, temp_video_fps : Fps, temp_video_resolution : Resolution, output_video_resolution : Resolution, output_video_fps : Fps) -> subprocess.Popen[Buffer]:
+	output_video_encoder = state_manager.get_item('output_video_encoder')
+	output_video_quality = state_manager.get_item('output_video_quality')
+	output_video_preset = state_manager.get_item('output_video_preset')
+	temp_video_path = get_temp_file_path(state_manager.get_temp_path(), target_path)
+	temp_video_format = cast(VideoFormat, get_file_format(temp_video_path))
+	output_video_encoder = fix_video_encoder(temp_video_format, output_video_encoder)
+
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_output_format('rawvideo'),
+		ffmpeg_builder.enforce_pixel_format(state_manager.get_item('temp_pixel_format')),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(temp_video_resolution)),
+		ffmpeg_builder.set_input_fps(temp_video_fps),
+		ffmpeg_builder.set_input('pipe:0'),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(output_video_resolution)),
+		ffmpeg_builder.set_video_encoder(output_video_encoder),
+		ffmpeg_builder.set_thread_count(16),
+		ffmpeg_builder.set_video_tag(output_video_encoder, temp_video_format),
+		ffmpeg_builder.set_video_quality(output_video_encoder, output_video_quality),
+		ffmpeg_builder.set_video_preset(output_video_encoder, output_video_preset),
+		ffmpeg_builder.concat(
+			ffmpeg_builder.set_video_fps(output_video_fps),
+			ffmpeg_builder.convert_color_space('bt709')
+		),
+		ffmpeg_builder.set_pixel_format(output_video_encoder),
+		ffmpeg_builder.force_output(temp_video_path)
+	)
+
+	return open_ffmpeg(commands)
+
+
+def log_debug(process : subprocess.Popen[Buffer]) -> None:
+	_, stderr = process.communicate()
+	errors = stderr.decode().splitlines()
+
+	for error in errors:
+		if error.strip():
+			logger.debug(error.strip(), __name__)
+
+
+def get_available_encoder_set() -> EncoderSet:
+	available_encoder_set : EncoderSet =\
+	{
+		'audio': [],
+		'image': [],
+		'video': []
+	}
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.get_encoders()
+	)
+	process = run_ffmpeg(commands)
+
+	while line := process.stdout.readline().decode().lower():
+		if line.startswith(' a'):
+			audio_encoder = line.split()[1]
+
+			if audio_encoder in facefusion.choices.audio_encoders and audio_encoder not in available_encoder_set.get('audio'):
+				available_encoder_set['audio'].append(cast(AudioEncoder, audio_encoder))
+
+		if line.startswith(' v'):
+			vision_encoder = line.split()[1]
+
+			if vision_encoder in facefusion.choices.image_encoders and vision_encoder not in available_encoder_set.get('image'):
+				available_encoder_set['image'].append(cast(ImageEncoder, vision_encoder))
+
+			if vision_encoder in facefusion.choices.video_encoders and vision_encoder not in available_encoder_set.get('video'):
+				available_encoder_set['video'].append(cast(VideoEncoder, vision_encoder))
+
+	return available_encoder_set
+
+
+@lru_cache()
+def get_static_available_encoder_set() -> EncoderSet:
+	return get_available_encoder_set()
+
+
+def extract_frames(target_path : str, output_path : str, temp_video_resolution : Resolution, temp_video_fps : Fps, trim_frame_start : int, trim_frame_end : int) -> bool:
+	color_transfer = ffprobe.extract_static_video_metadata(target_path).get('color_transfer')
+	extract_frame_total = vision.predict_video_frame_total(target_path, temp_video_fps, trim_frame_start, trim_frame_end)
+	temp_frames_pattern = get_temp_frames_pattern(state_manager.get_temp_path(), output_path, state_manager.get_item('temp_frame_format'), '%08d')
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input(target_path),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(temp_video_resolution)),
+		ffmpeg_builder.set_frame_quality(0),
+		ffmpeg_builder.enforce_pixel_format('rgb24'),
+		ffmpeg_builder.concat(
+			ffmpeg_builder.select_frame_range(trim_frame_start, trim_frame_end, temp_video_fps),
+			ffmpeg_builder.restrict_color_transfer(color_transfer)
+		),
+		ffmpeg_builder.prevent_frame_drop(),
+		ffmpeg_builder.set_start_number(trim_frame_start),
+		ffmpeg_builder.set_output(temp_frames_pattern),
+		ffmpeg_builder.set_progress(),
+		ffmpeg_builder.cast_stream()
+	)
+
+	with cli_progress.create(total = extract_frame_total) as progress:
+		progress.set_title(translator.get('extracting'))
+		process = run_ffmpeg(commands)
+		render_progress(process, progress)
+		return await_process(process).returncode == 0
+
+
+def spawn_frames(target_path : str, output_path : str, temp_video_resolution : Resolution, temp_video_fps : Fps, trim_frame_start : int, trim_frame_end : int) -> bool:
+	spawn_frame_total = trim_frame_end - trim_frame_start
+	duration = spawn_frame_total / temp_video_fps
+	temp_frames_pattern = get_temp_frames_pattern(state_manager.get_temp_path(), output_path, state_manager.get_item('temp_frame_format'), '%08d')
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_loop(),
+		ffmpeg_builder.set_input(target_path),
+		ffmpeg_builder.set_video_duration(duration),
+		ffmpeg_builder.set_video_fps(temp_video_fps),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(temp_video_resolution)),
+		ffmpeg_builder.set_output(temp_frames_pattern),
+		ffmpeg_builder.set_progress(),
+		ffmpeg_builder.cast_stream()
+	)
+
+	with cli_progress.create(total = spawn_frame_total) as progress:
+		progress.set_title(translator.get('spawning'))
+		process = run_ffmpeg(commands)
+		render_progress(process, progress)
+		return await_process(process).returncode == 0
+
+
+def copy_image(target_path : str, output_path : str, temp_image_resolution : Resolution) -> bool:
+	temp_image_path = get_temp_file_path(state_manager.get_temp_path(), output_path)
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input(target_path),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(temp_image_resolution)),
+		ffmpeg_builder.set_image_quality(target_path, 100),
+		ffmpeg_builder.force_output(temp_image_path)
+	)
+	return await_process(run_ffmpeg(commands)).returncode == 0
+
+
+def finalize_image(output_path : str, output_image_resolution : Resolution) -> bool:
+	output_image_quality = state_manager.get_item('output_image_quality')
+	temp_image_path = get_temp_file_path(state_manager.get_temp_path(), output_path)
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input(temp_image_path),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(output_image_resolution)),
+		ffmpeg_builder.set_image_quality(output_path, output_image_quality),
+		ffmpeg_builder.force_output(output_path)
+	)
+	return await_process(run_ffmpeg(commands)).returncode == 0
+
+
+def read_audio_buffer(target_path : str, audio_sample_rate : SampleRate, audio_sample_size : int, audio_channel_total : int) -> Optional[Buffer]:
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input(target_path),
+		ffmpeg_builder.ignore_video_stream(),
+		ffmpeg_builder.set_audio_sample_rate(audio_sample_rate),
+		ffmpeg_builder.set_audio_sample_size(audio_sample_size),
+		ffmpeg_builder.set_audio_channel_total(audio_channel_total),
+		ffmpeg_builder.cast_stream()
+	)
+
+	process = open_ffmpeg(commands)
+	audio_buffer, _ = process.communicate()
+
+	if process.returncode == 0:
+		return audio_buffer
+	return None
+
+
+def restore_audio(target_path : str, output_path : str, trim_frame_start : int, trim_frame_end : int) -> bool:
+	output_audio_encoder = state_manager.get_item('output_audio_encoder')
+	output_audio_quality = state_manager.get_item('output_audio_quality')
+	output_audio_volume = state_manager.get_item('output_audio_volume')
+	target_video_fps = vision.detect_video_fps(target_path)
+	temp_video_path = get_temp_file_path(state_manager.get_temp_path(), output_path)
+	temp_video_format = cast(VideoFormat, get_file_format(output_path))
+	temp_video_duration = vision.detect_video_duration(temp_video_path)
+	output_video_format = cast(VideoFormat, get_file_format(output_path))
+
+	output_audio_encoder = fix_audio_encoder(temp_video_format, output_audio_encoder)
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input(temp_video_path),
+		ffmpeg_builder.select_media_range(trim_frame_start, trim_frame_end, target_video_fps),
+		ffmpeg_builder.set_input(target_path),
+		ffmpeg_builder.copy_video_encoder(),
+		ffmpeg_builder.set_audio_encoder(output_audio_encoder),
+		ffmpeg_builder.set_audio_quality(output_audio_encoder, output_audio_quality),
+		ffmpeg_builder.set_audio_volume(output_audio_volume),
+		ffmpeg_builder.select_media_stream('0:v:0'),
+		ffmpeg_builder.select_media_stream('1:a:0'),
+		ffmpeg_builder.set_video_duration(temp_video_duration),
+		ffmpeg_builder.set_faststart(output_video_format),
+		ffmpeg_builder.force_output(output_path)
+	)
+	return await_process(run_ffmpeg(commands)).returncode == 0
+
+
+def replace_audio(audio_path : str, output_path : str) -> bool:
+	output_audio_encoder = state_manager.get_item('output_audio_encoder')
+	output_audio_quality = state_manager.get_item('output_audio_quality')
+	output_audio_volume = state_manager.get_item('output_audio_volume')
+	temp_video_path = get_temp_file_path(state_manager.get_temp_path(), output_path)
+	temp_video_format = cast(VideoFormat, get_file_format(output_path))
+	temp_video_duration = vision.detect_video_duration(temp_video_path)
+	output_video_format = cast(VideoFormat, get_file_format(output_path))
+
+	output_audio_encoder = fix_audio_encoder(temp_video_format, output_audio_encoder)
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input(temp_video_path),
+		ffmpeg_builder.set_input(audio_path),
+		ffmpeg_builder.copy_video_encoder(),
+		ffmpeg_builder.set_audio_encoder(output_audio_encoder),
+		ffmpeg_builder.set_audio_quality(output_audio_encoder, output_audio_quality),
+		ffmpeg_builder.set_audio_volume(output_audio_volume),
+		ffmpeg_builder.set_video_duration(temp_video_duration),
+		ffmpeg_builder.set_faststart(output_video_format),
+		ffmpeg_builder.force_output(output_path)
+	)
+	return await_process(run_ffmpeg(commands)).returncode == 0
+
+
+def merge_video(target_path : str, output_path : str, temp_video_fps : Fps, output_video_fps : Fps, output_video_resolution : Resolution, trim_frame_start : int, trim_frame_end : int) -> bool:
+	output_video_encoder = state_manager.get_item('output_video_encoder')
+	output_video_quality = state_manager.get_item('output_video_quality')
+	output_video_preset = state_manager.get_item('output_video_preset')
+	merge_frame_total = vision.predict_video_frame_total(target_path, output_video_fps, trim_frame_start, trim_frame_end)
+	temp_video_path = get_temp_file_path(state_manager.get_temp_path(), output_path)
+	temp_video_format = cast(VideoFormat, get_file_format(output_path))
+	temp_frames_pattern = get_temp_frames_pattern(state_manager.get_temp_path(), output_path, state_manager.get_item('temp_frame_format'), '%08d')
+
+	output_video_encoder = fix_video_encoder(temp_video_format, output_video_encoder)
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input_fps(temp_video_fps),
+		ffmpeg_builder.set_start_number(trim_frame_start),
+		ffmpeg_builder.set_input(temp_frames_pattern),
+		ffmpeg_builder.set_media_resolution(vision.pack_resolution(output_video_resolution)),
+		ffmpeg_builder.set_video_encoder(output_video_encoder),
+		ffmpeg_builder.set_video_tag(output_video_encoder, temp_video_format),
+		ffmpeg_builder.set_video_quality(output_video_encoder, output_video_quality),
+		ffmpeg_builder.set_video_preset(output_video_encoder, output_video_preset),
+		ffmpeg_builder.concat(
+			ffmpeg_builder.set_video_fps(output_video_fps),
+			ffmpeg_builder.keep_video_alpha(output_video_encoder),
+			ffmpeg_builder.convert_color_space('bt709')
+		),
+		ffmpeg_builder.set_pixel_format(output_video_encoder),
+		ffmpeg_builder.force_output(temp_video_path),
+		ffmpeg_builder.set_progress(),
+		ffmpeg_builder.cast_stream()
+	)
+
+	with cli_progress.create(total = merge_frame_total) as progress:
+		progress.set_title(translator.get('merging'))
+		process = run_ffmpeg(commands)
+		render_progress(process, progress)
+		return await_process(process).returncode == 0
+
+
+def concat_video(output_path : str, temp_output_paths : List[str]) -> bool:
+	file_descriptor, concat_video_path = tempfile.mkstemp()
+	os.close(file_descriptor)
+
+	with open(concat_video_path, 'w') as concat_video_file:
+		for temp_output_path in temp_output_paths:
+			concat_video_file.write('file \'' + os.path.abspath(temp_output_path) + '\'' + os.linesep)
+		concat_video_file.flush()
+		concat_video_file.close()
+
+	output_path = os.path.abspath(output_path)
+	output_video_format = cast(VideoFormat, get_file_format(output_path))
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.unsafe_concat(),
+		ffmpeg_builder.set_input(concat_video_file.name),
+		ffmpeg_builder.copy_video_encoder(),
+		ffmpeg_builder.copy_audio_encoder(),
+		ffmpeg_builder.set_faststart(output_video_format),
+		ffmpeg_builder.force_output(output_path)
+	)
+	process = run_ffmpeg(commands)
+	process.communicate()
+	remove_file(concat_video_path)
+	return process.returncode == 0
+
+
+def sanitize_audio(file : BinaryIO, audio_path : str, security_strategy : ApiSecurityStrategy) -> bool:
+	if security_strategy == 'strict':
+		commands = ffmpeg_builder.chain(
+			ffmpeg_builder.set_input('pipe:0'),
+			ffmpeg_builder.select_media_stream('0:a:0'),
+			ffmpeg_builder.deep_copy_audio(),
+			ffmpeg_builder.strip_metadata(),
+			ffmpeg_builder.abort_empty_stream(),
+			ffmpeg_builder.force_output(audio_path)
+		)
+		process = pipe_ffmpeg(commands, file)
+		process.communicate()
+		return process.returncode == 0
+
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input('pipe:0'),
+		ffmpeg_builder.select_media_stream('0:a:0'),
+		ffmpeg_builder.copy_audio_encoder(),
+		ffmpeg_builder.strip_metadata(),
+		ffmpeg_builder.abort_empty_stream(),
+		ffmpeg_builder.force_output(audio_path)
+	)
+	process = pipe_ffmpeg(commands, file)
+	process.communicate()
+	return process.returncode == 0
+
+
+def sanitize_image(file : BinaryIO, image_path : str) -> bool:
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input('pipe:0'),
+		ffmpeg_builder.select_media_stream('0:v:0'),
+		ffmpeg_builder.deep_copy_image(),
+		ffmpeg_builder.strip_metadata(),
+		ffmpeg_builder.force_output(image_path)
+	)
+	process = pipe_ffmpeg(commands, file)
+	process.communicate()
+	return process.returncode == 0
+
+
+def sanitize_video(file : BinaryIO, video_path : str, security_strategy : ApiSecurityStrategy) -> bool:
+	output_video_preset = state_manager.get_item('output_video_preset')
+
+	if security_strategy == 'strict':
+		video_format = get_file_format(video_path)
+		video_encoder = facefusion.choices.video_set.get(video_format) #type:ignore[call-overload]
+		commands = ffmpeg_builder.chain(
+			ffmpeg_builder.set_input('pipe:0'),
+			ffmpeg_builder.select_media_stream('0:v:0'),
+			ffmpeg_builder.select_media_stream('0:a:0?'),
+			ffmpeg_builder.set_video_encoder(video_encoder),
+			ffmpeg_builder.set_video_preset(video_encoder, output_video_preset),
+			ffmpeg_builder.set_pixel_format(video_encoder),
+			ffmpeg_builder.deep_copy_video(),
+			ffmpeg_builder.deep_copy_audio(),
+			ffmpeg_builder.strip_metadata(),
+			ffmpeg_builder.abort_empty_stream(),
+			ffmpeg_builder.force_output(video_path)
+		)
+		process = pipe_ffmpeg(commands, file)
+		process.communicate()
+		return process.returncode == 0
+
+	commands = ffmpeg_builder.chain(
+		ffmpeg_builder.set_input('pipe:0'),
+		ffmpeg_builder.select_media_stream('0:v:0'),
+		ffmpeg_builder.select_media_stream('0:a:0?'),
+		ffmpeg_builder.copy_video_encoder(),
+		ffmpeg_builder.copy_audio_encoder(),
+		ffmpeg_builder.strip_metadata(),
+		ffmpeg_builder.abort_empty_stream(),
+		ffmpeg_builder.force_output(video_path)
+	)
+	process = pipe_ffmpeg(commands, file)
+	process.communicate()
+	return process.returncode == 0
+
+
+def fix_audio_encoder(video_format : VideoFormat, audio_encoder : AudioEncoder) -> AudioEncoder:
+	if video_format == 'avi' and audio_encoder == 'libopus':
+		return 'aac'
+	if video_format in [ 'm4v', 'mpeg', 'wmv' ]:
+		return 'aac'
+	if video_format == 'mov' and audio_encoder in [ 'flac', 'libopus' ]:
+		return 'aac'
+	if video_format == 'mxf':
+		return 'pcm_s16le'
+	if video_format == 'webm':
+		return 'libopus'
+	return audio_encoder
+
+
+def fix_video_encoder(video_format : VideoFormat, video_encoder : VideoEncoder) -> VideoEncoder:
+	if video_format in [ 'm4v', 'mpeg', 'mxf', 'wmv' ]:
+		return 'libx264'
+	if video_format in [ 'mkv', 'mp4' ] and video_encoder == 'rawvideo':
+		return 'libx264'
+	if video_format == 'mov' and video_encoder == 'libvpx-vp9':
+		return 'libx264'
+	if video_format == 'webm':
+		return 'libvpx-vp9'
+	return video_encoder

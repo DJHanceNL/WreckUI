@@ -1,0 +1,170 @@
+import asyncio
+import os
+from typing import List, cast
+
+from starlette.background import BackgroundTask
+from starlette.datastructures import UploadFile
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.status import HTTP_200_OK, HTTP_201_CREATED, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND, HTTP_415_UNSUPPORTED_MEDIA_TYPE
+
+from facefusion import translator
+from facefusion.apis import asset_store, http_manager
+from facefusion.apis.asset_helper import capture_asset_faces, capture_asset_frames, save_asset_files
+from facefusion.apis.asset_validator import validate_asset_resolution, validate_asset_type, validate_frame_index, validate_subject
+from facefusion.apis.media_validator import validate_resolution
+from facefusion.apis.multipart_helper import create_multipart_response
+from facefusion.filesystem import remove_file
+from facefusion.types import AssetType, ImageAsset, VideoAsset
+from facefusion.vision import is_vision_frames
+
+
+async def get_assets(request : Request) -> Response:
+	asset_set = asset_store.get_assets()
+	assets = []
+
+	if asset_set:
+		for asset in asset_set.values():
+			assets.append(
+			{
+				'id': asset.get('id'),
+				'created_at': asset.get('created_at').isoformat(),
+				'expires_at': asset.get('expires_at').isoformat(),
+				'type': asset.get('type'),
+				'media': asset.get('media'),
+				'name': asset.get('name'),
+				'format': asset.get('format'),
+				'size': asset.get('size'),
+				'metadata': asset.get('metadata')
+			})
+
+	return JSONResponse(
+	{
+		'assets': assets
+	}, status_code = HTTP_200_OK)
+
+
+async def get_asset(request : Request) -> Response:
+	action = request.query_params.get('action')
+	asset_id = request.path_params.get('asset_id')
+	asset = asset_store.get_asset(asset_id)
+
+	if action == 'capture':
+		if asset and asset.get('media') in [ 'image', 'video' ]:
+			subject = request.query_params.get('subject')
+			resolution = request.query_params.get('resolution')
+			frame_indexes = request.query_params.getlist('frame_index')
+			vision_frames = []
+
+			if validate_frame_index(frame_indexes) and validate_subject(subject) and validate_resolution(resolution):
+				http_task = asyncio.current_task()
+				http_manager.start_request('capture', http_task)
+
+				if subject == 'frame':
+					vision_frames = await asyncio.to_thread(capture_asset_frames, cast(ImageAsset | VideoAsset, asset), frame_indexes, resolution)
+
+				if subject == 'face':
+					vision_frames = await asyncio.to_thread(capture_asset_faces, cast(ImageAsset | VideoAsset, asset), frame_indexes, resolution)
+
+				http_manager.end_request('capture', http_task)
+
+			if is_vision_frames(vision_frames):
+				return create_multipart_response(vision_frames)
+
+		return Response(status_code = HTTP_400_BAD_REQUEST)
+
+	if action == 'download':
+		if asset and asset.get('media') in [ 'audio', 'image', 'video' ]:
+			asset_path = asset.get('path')
+
+			if os.path.exists(asset_path):
+				http_task = asyncio.current_task()
+
+				http_manager.start_request('download', http_task)
+				return FileResponse(asset_path, filename = asset.get('name'), background = BackgroundTask(http_manager.end_request, 'download', http_task))
+
+		return Response(status_code = HTTP_400_BAD_REQUEST)
+
+	if asset:
+		return JSONResponse(
+		{
+			'id': asset.get('id'),
+			'created_at': asset.get('created_at').isoformat(),
+			'expires_at': asset.get('expires_at').isoformat(),
+			'type': asset.get('type'),
+			'media': asset.get('media'),
+			'name': asset.get('name'),
+			'format': asset.get('format'),
+			'size': asset.get('size'),
+			'metadata': asset.get('metadata')
+		}, status_code = HTTP_200_OK)
+
+	return JSONResponse(
+	{
+		'message': translator.get('something_went_wrong', 'facefusion.apis')
+	}, status_code = HTTP_404_NOT_FOUND)
+
+
+async def upload_assets(request : Request) -> Response:
+	asset_type = cast(AssetType, request.query_params.get('type'))
+
+	if asset_type in [ 'source', 'target' ]:
+		form = await request.form(max_fields = 0, max_files = 32)
+		upload_files = cast(List[UploadFile], form.getlist('file'))
+		http_task = asyncio.current_task()
+		http_manager.start_request('upload', http_task)
+
+		if upload_files and validate_asset_type(upload_files) and await asyncio.to_thread(validate_asset_resolution, upload_files):
+			asset_paths = await save_asset_files(upload_files)
+
+			if asset_paths:
+				asset_ids : List[str] = []
+
+				for asset_path in asset_paths:
+					asset = asset_store.create_asset(asset_type, asset_path)
+
+					if asset:
+						asset_id = asset.get('id')
+
+						if asset_id:
+							asset_ids.append(asset_id)
+
+				if asset_ids:
+					http_manager.end_request('upload', http_task)
+					return JSONResponse(
+					{
+						'asset_ids': asset_ids
+					}, status_code = HTTP_201_CREATED)
+
+			http_manager.end_request('upload', http_task)
+			return Response(status_code = HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+
+		http_manager.end_request('upload', http_task)
+
+	return Response(status_code = HTTP_400_BAD_REQUEST)
+
+
+async def delete_assets(request : Request) -> Response:
+	asset_set = asset_store.get_assets()
+	asset_ids : List[str] = []
+
+	if asset_set:
+		for asset in asset_set.values():
+			if remove_file(asset.get('path')):
+				asset_ids.append(asset.get('id'))
+
+		for asset_id in asset_ids:
+			asset_store.delete_asset(asset_id)
+
+	return Response(status_code = HTTP_200_OK)
+
+
+async def delete_asset(request : Request) -> Response:
+	asset_id = request.path_params.get('asset_id')
+	asset = asset_store.get_asset(asset_id)
+
+	if asset and remove_file(asset.get('path')):
+		asset_store.delete_asset(asset_id)
+		return Response(status_code = HTTP_200_OK)
+
+	return Response(status_code = HTTP_404_NOT_FOUND)
